@@ -1,0 +1,18 @@
+version: 1
+
+jobs:
+  - name: download-java-dependencies
+    type: package
+    repository:
+      url: https://github.com/example/project.git
+      ref: main
+      depth: 1
+    workingDirectory: .
+    packageManager: gradle
+    command:
+      executable: ./gradlew
+      args:
+        - build
+        - --no-daemon
+    cache: ../artifacts/gradle-cache
+    timeout: 30m

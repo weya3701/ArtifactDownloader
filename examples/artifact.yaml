@@ -1,0 +1,12 @@
+version: 1
+
+jobs:
+  - name: download-release-files
+    type: urls
+
+    urlList: ./downloads.txt
+    output: ./artifacts/downloads
+
+    concurrency: 1
+    timeout: 10m
+    overwrite: false

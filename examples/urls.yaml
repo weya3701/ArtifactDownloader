@@ -1,0 +1,10 @@
+version: 1
+
+jobs:
+  - name: download-files
+    type: urls
+    output: ../artifacts/files
+    urlList: ./downloads.txt
+    concurrency: 4
+    timeout: 10m
+    overwrite: false

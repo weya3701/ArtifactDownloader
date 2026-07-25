@@ -5,18 +5,22 @@ import (
 	"strings"
 )
 
+// Variables 提供固定命令建構時使用的 cache、output 與隔離 home 路徑。
 type Variables struct {
 	Cache  string
 	Output string
 	Home   string
 }
 
+// Spec 是驗證後可交給 executor 的固定執行檔、參數與必要環境。
 type Spec struct {
 	Executable  string
 	Args        []string
 	Environment map[string]string
 }
 
+// Validate 檢查 manager/action 是否為內建 allowlist 的合法組合。
+// 輸入為套件管理器與 action；合法時輸出 nil，空白或不允許的組合輸出錯誤。
 func Validate(manager, action string) error {
 	manager = strings.ToLower(strings.TrimSpace(manager))
 	action = strings.ToLower(strings.TrimSpace(action))
@@ -31,6 +35,8 @@ func Validate(manager, action string) error {
 	}
 }
 
+// Resolve 將合法 manager/action 與路徑變數解析為不可任意改寫的命令規格。
+// 輸入為 manager、action 與 Variables；輸出為 Spec，組合不合法或缺少必要 output 時輸出錯誤。
 func Resolve(manager, action string, variables Variables) (Spec, error) {
 	manager = strings.ToLower(strings.TrimSpace(manager))
 	action = strings.ToLower(strings.TrimSpace(action))
@@ -76,6 +82,8 @@ func Resolve(manager, action string, variables Variables) (Spec, error) {
 	return spec, nil
 }
 
+// errorsForOutput 建立缺少輸出目錄時的一致錯誤訊息。
+// 輸入為 manager 與 action；輸出為描述 output 必填的 error。
 func errorsForOutput(manager, action string) error {
 	return fmt.Errorf("output is required for %s action %q", manager, action)
 }

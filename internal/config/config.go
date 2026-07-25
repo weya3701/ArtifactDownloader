@@ -14,12 +14,17 @@ import (
 )
 
 const (
-	JobTypeURLs    = "urls"
+	// JobTypeURLs 表示從文字清單並行下載 HTTP/HTTPS 檔案的 job 類型。
+	JobTypeURLs = "urls"
+	// JobTypePackage 表示 clone repository 後執行固定套件管理命令的 job 類型。
 	JobTypePackage = "package"
 )
 
+// Duration 包裝 time.Duration，讓 YAML 可使用 10m、30s 等文字格式。
 type Duration time.Duration
 
+// UnmarshalYAML 將 YAML scalar 解析為正值檢查前的 Duration。
+// 輸入為 YAML node；成功時寫入接收者並輸出 nil，格式無效時輸出解析錯誤。
 func (d *Duration) UnmarshalYAML(node *yaml.Node) error {
 	value, err := time.ParseDuration(node.Value)
 	if err != nil {
@@ -29,8 +34,11 @@ func (d *Duration) UnmarshalYAML(node *yaml.Node) error {
 	return nil
 }
 
+// Value 將設定用 Duration 轉回標準 time.Duration。
+// 輸入為接收者 d；輸出為等值的 time.Duration。
 func (d Duration) Value() time.Duration { return time.Duration(d) }
 
+// Config 表示完整任務設定及不寫回 YAML 的設定檔基準目錄。
 type Config struct {
 	Version int   `yaml:"version"`
 	Jobs    []Job `yaml:"jobs"`
@@ -38,6 +46,7 @@ type Config struct {
 	BaseDir string `yaml:"-"`
 }
 
+// Job 描述一個 URLs 或 package 工作所需的共同與類型專用輸入。
 type Job struct {
 	Name             string          `yaml:"name"`
 	Type             string          `yaml:"type"`
@@ -54,6 +63,7 @@ type Job struct {
 	Callback         ExternalCommand `yaml:"callback"`
 }
 
+// Repository 描述 Git 來源、ref、clone 深度及受控的額外 Git 參數。
 type Repository struct {
 	URL       string   `yaml:"url"`
 	Ref       string   `yaml:"ref"`
@@ -62,15 +72,19 @@ type Repository struct {
 	CloneArgs []string `yaml:"cloneArgs"`
 }
 
+// PackageCommand 只允許宣告 package action，不允許任意 executable 或 args。
 type PackageCommand struct {
 	Action string `yaml:"action"`
 }
 
+// ExternalCommand 描述需額外授權的 callback executable 與逐項參數。
 type ExternalCommand struct {
 	Executable string   `yaml:"executable"`
 	Args       []string `yaml:"args"`
 }
 
+// Load 讀取、嚴格解析、套用預設值並驗證任務 YAML。
+// 輸入為設定檔 path；輸出為含 BaseDir 的 Config，讀取、未知欄位或驗證失敗時輸出錯誤。
 func Load(path string) (Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -96,6 +110,8 @@ func Load(path string) (Config, error) {
 	return cfg, nil
 }
 
+// applyDefaults 為未指定的 concurrency 與 timeout 寫入安全預設值。
+// 輸入及輸出皆透過 Config 指標 c；本函式沒有回傳值。
 func (c *Config) applyDefaults() {
 	for i := range c.Jobs {
 		if c.Jobs[i].Concurrency == 0 {
@@ -107,6 +123,8 @@ func (c *Config) applyDefaults() {
 	}
 }
 
+// Validate 檢查版本、job 唯一性、共同欄位與各 job 類型的必要條件。
+// 輸入為 Config；合法時輸出 nil，第一個不合法欄位輸出帶 job 脈絡的錯誤。
 func (c Config) Validate() error {
 	if c.Version != 1 {
 		return fmt.Errorf("unsupported config version %d (expected 1)", c.Version)
@@ -171,6 +189,8 @@ func (c Config) Validate() error {
 	return nil
 }
 
+// supportedPackageManager 判斷名稱是否為內建支援的套件管理器。
+// 輸入為可能含空白或大小寫差異的名稱；輸出為是否支援的布林值。
 func supportedPackageManager(value string) bool {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "gradle", "mvn", "npm", "pip", "yarn":
@@ -180,6 +200,8 @@ func supportedPackageManager(value string) bool {
 	}
 }
 
+// Resolve 以 Config.BaseDir 為基準解析相對路徑，並清理絕對路徑。
+// 輸入為相對或絕對 path；輸出為供檔案操作使用的標準化路徑。
 func (c Config) Resolve(path string) string {
 	if filepath.IsAbs(path) {
 		return filepath.Clean(path)

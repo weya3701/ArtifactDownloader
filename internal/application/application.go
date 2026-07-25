@@ -21,6 +21,8 @@ import (
 	"artifactdownloader/internal/repository"
 )
 
+// Runner 保存 job 編排時使用的輸出、workspace、callback 與環境安全策略。
+// 輸入由呼叫端設定各欄位；輸出透過 Run 回傳 Result，不直接保存執行結果。
 type Runner struct {
 	Stdout             io.Writer
 	Stderr             io.Writer
@@ -30,6 +32,9 @@ type Runner struct {
 	InheritEnvironment bool
 }
 
+// Run 依設定順序執行全部或指定名稱的 job。
+// 輸入為取消/逾時用 ctx、已驗證 cfg 與可留空的 selectedJob；輸出為已執行 job 的結果清單，
+// 若工作不存在或 callback 未授權等原因使流程無法開始，則另回傳流程錯誤。
 func (r Runner) Run(ctx context.Context, cfg config.Config, selectedJob string) ([]report.Result, error) {
 	jobs := cfg.Jobs
 	if selectedJob != "" {
@@ -63,6 +68,8 @@ func (r Runner) Run(ctx context.Context, cfg config.Config, selectedJob string) 
 	return results, nil
 }
 
+// runJob 在 job 自身 timeout 內分派 URLs 或 package 流程，並於成功後執行 callback。
+// 輸入為父 context、全域設定與單一 job；輸出為包含耗時、檔案數及錯誤的 Result。
 func (r Runner) runJob(parent context.Context, cfg config.Config, job config.Job) report.Result {
 	result := report.Result{Name: job.Name, Type: job.Type, StartedAt: time.Now()}
 	ctx, cancel := context.WithTimeout(parent, job.Timeout.Value())
@@ -86,6 +93,8 @@ func (r Runner) runJob(parent context.Context, cfg config.Config, job config.Job
 	return result
 }
 
+// runCallback 在設定檔目錄執行已獲 CLI 授權的外部 callback。
+// 輸入為 job context、路徑基準 cfg 與 callback 設定；成功輸出 nil，失敗輸出 callback 錯誤。
 func (r Runner) runCallback(ctx context.Context, cfg config.Config, job config.Job) error {
 	variables := map[string]string{
 		"ARTIFACT_CACHE":  resolveOptional(cfg, job.Cache),
@@ -109,6 +118,8 @@ func (r Runner) runCallback(ctx context.Context, cfg config.Config, job config.J
 	return nil
 }
 
+// resolveOptional 將非空路徑依設定檔目錄解析為絕對/清理後路徑。
+// 輸入為設定與可能為空的路徑；輸出為解析結果，空輸入仍輸出空字串。
 func resolveOptional(cfg config.Config, path string) string {
 	if path == "" {
 		return ""
@@ -116,6 +127,8 @@ func resolveOptional(cfg config.Config, path string) string {
 	return cfg.Resolve(path)
 }
 
+// runURLs 讀取 URL 清單並以 job.Concurrency 大小的 worker pool 並行下載。
+// 輸入為 job context、路徑基準 cfg 與 URLs job；輸出為完成檔案數及第一個下載/取消錯誤。
 func (r Runner) runURLs(ctx context.Context, cfg config.Config, job config.Job) (int, error) {
 	urls, err := readURLList(cfg.Resolve(job.URLList))
 	if err != nil {
@@ -201,6 +214,8 @@ func (r Runner) runURLs(ctx context.Context, cfg config.Config, job config.Job) 
 	return completed, nil
 }
 
+// runPackage 建立暫存 workspace、clone repository，解析固定 package 命令後在受控環境執行。
+// 輸入為 job context、路徑基準 cfg 與 package job；成功輸出 nil，任一準備或執行階段失敗則輸出錯誤。
 func (r Runner) runPackage(ctx context.Context, cfg config.Config, job config.Job) error {
 	workspace, err := os.MkdirTemp("", "artifact-downloader-*")
 	if err != nil {
@@ -285,6 +300,8 @@ func (r Runner) runPackage(ctx context.Context, cfg config.Config, job config.Jo
 	return nil
 }
 
+// expandVariables 只替換呼叫端明確提供的 ${NAME} 變數，不進行 shell 展開。
+// 輸入為原始字串與名稱到值的映射；輸出為完成受控替換的字串。
 func expandVariables(value string, variables map[string]string) string {
 	replacements := make([]string, 0, len(variables)*2)
 	for name, replacement := range variables {
@@ -293,6 +310,8 @@ func expandVariables(value string, variables map[string]string) string {
 	return strings.NewReplacer(replacements...).Replace(value)
 }
 
+// readURLList 讀取文字 URL 清單，忽略空行、註解及完全重複的 URL。
+// 輸入為清單檔案路徑；輸出為保持原順序的唯一 URL 切片或檔案讀取錯誤。
 func readURLList(path string) ([]string, error) {
 	file, err := os.Open(path)
 	if err != nil {
@@ -321,6 +340,8 @@ func readURLList(path string) ([]string, error) {
 	return urls, nil
 }
 
+// safeWorkingDirectory 確認要求的工作目錄在 clone repository 範圍內。
+// 輸入為 repository 根目錄與相對/絕對 requested 路徑；輸出為可用路徑，越界時輸出錯誤。
 func safeWorkingDirectory(repositoryDir, requested string) (string, error) {
 	workingDir := requested
 	if !filepath.IsAbs(workingDir) {
@@ -336,6 +357,8 @@ func safeWorkingDirectory(repositoryDir, requested string) (string, error) {
 	return workingDir, nil
 }
 
+// output 取得一般外部命令輸出的 writer。
+// 輸入來自 Runner.Stdout；輸出為該 writer，未設定時輸出 io.Discard。
 func (r Runner) output() io.Writer {
 	if r.Stdout == nil {
 		return io.Discard
@@ -343,6 +366,8 @@ func (r Runner) output() io.Writer {
 	return r.Stdout
 }
 
+// errorOutput 取得外部命令錯誤輸出的 writer。
+// 輸入來自 Runner.Stderr；輸出為該 writer，未設定時輸出 io.Discard。
 func (r Runner) errorOutput() io.Writer {
 	if r.Stderr == nil {
 		return io.Discard

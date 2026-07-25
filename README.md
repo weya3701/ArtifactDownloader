@@ -35,7 +35,25 @@ go build -o artifact-downloader ./cmd/artifact-downloader
 ./artifact-downloader run --config artifact.yaml --job download-files
 ```
 
-`--verbose` 會顯示 Git 與外部命令輸出；`--keep-workspace` 會保留 package job 的暫存目錄供除錯。
+`--verbose` 會顯示 Git 與外部命令輸出；`--keep-workspace` 會保留 package job 的暫存目錄供除錯。Callback 預設停用，只有信任設定檔時才應使用 `--allow-callback`。
+
+Package job 預設只取得內建允許的最小環境。由管理者提供受信任的環境政策：
+
+```bash
+./artifact-downloader run \
+  --config artifact.yaml \
+  --environment-config examples/environment.yaml
+```
+
+除錯時也可完整繼承 Artifact Downloader 程序的原始環境：
+
+```bash
+./artifact-downloader run \
+  --config artifact.yaml \
+  --inherit-environment
+```
+
+`--environment-config` 與 `--inherit-environment` 互斥。完整繼承可能把 token 或雲端憑證暴露給 repository 的建構邏輯，只能用於可信 repository。
 
 ### URL 模式
 
@@ -58,7 +76,7 @@ jobs:
 
 ### 下載完成 Callback
 
-每個 job 都可設定 `callback`。只有主要下載流程成功後才會執行；callback 命令失敗時，該 job 也會回報失敗。命令與參數需分開設定：
+每個 job 都可設定 `callback`。Callback 可執行任意外部程式，因此預設停用；只有設定檔受信任時才可用 `run --allow-callback` 開啟。主要下載流程成功後才會執行 callback；callback 命令失敗時，該 job 也會回報失敗。命令與參數需分開設定：
 
 ```yaml
 callback:
@@ -85,10 +103,7 @@ jobs:
     workingDirectory: backend
     packageManager: gradle
     command:
-      executable: ./gradlew
-      args:
-        - build
-        - --no-daemon
+      action: build
     cache: ./artifacts/gradle-cache
     timeout: 30m
 ```
@@ -99,11 +114,23 @@ jobs:
 2. 使用系統的 `git` clone repository，並 checkout `ref`。
 3. 切換至 `workingDirectory`。
 4. 將套件管理器的 cache 指向設定的 `cache` 目錄。
-5. 執行 `command.executable` 與 `command.args`，由建構或安裝流程下載依賴。
+5. 依 `packageManager` 與 `command.action` 選擇內建的固定命令，由建構或安裝流程下載依賴。
 6. 將 cache 保留在 workspace 外；若命令自行寫入 `output`，該產物也會保留。
 7. 成功或失敗後清除 workspace，除非指定 `--keep-workspace`。
 
-`cache` 是 package job 的必填欄位。`output` 是選填路徑，工具不會自動複製建構產物；repository 內的建構命令或 wrapper script 必須明確將產物寫入 `${ARTIFACT_OUTPUT}`。
+`cache` 是 package job 的必填欄位。除 pip `download` action 外，`output` 是選填路徑；工具不會自動複製建構產物，repository 內的建構邏輯必須明確將產物寫入 `ARTIFACT_OUTPUT` 指定的目錄。
+
+Package job 不接受自訂 executable、args 或 environment。無法匹配的 manager/action 會在設定驗證階段被拒絕。工具只使用系統安裝的 package manager，不執行 repository 內的 `gradlew` 或 `mvnw` wrapper。
+
+目前支援的動作與固定命令如下：
+
+| Package manager | Action | 固定命令 |
+| --- | --- | --- |
+| Gradle | `build` | `gradle build --no-daemon` |
+| Maven | `build` | `mvn package --batch-mode` |
+| npm | `install` | `npm ci --ignore-scripts` |
+| Yarn | `install` | `yarn install --immutable --ignore-scripts` |
+| pip | `download` | `python3 -m pip download -r requirements.txt --dest <output>` |
 
 工具會依 `packageManager` 自動設定 cache：
 
@@ -115,38 +142,56 @@ jobs:
 | Yarn | `YARN_CACHE_FOLDER=<cache>` |
 | pip | `PIP_CACHE_DIR=<cache>` |
 
-常見建構或安裝命令如下；實際命令仍應依 repository 的 wrapper、lockfile 與 CI 規則調整：
-
-| Package manager | 命令範例 |
-| --- | --- |
-| Gradle | `./gradlew build --no-daemon` |
-| Maven | `./mvnw package` |
-| npm | `npm ci` |
-| Yarn | `yarn install --immutable` |
-| pip | `python -m pip install -r requirements.txt` |
-
-執行命令時會提供以下環境變數，也會在 `command.executable`、`command.args` 與自訂 `environment` 的值中展開相同格式的受控變數：
+Package 命令使用最小環境，不會繼承程序中的任意 token 或 secret。保留的系統變數僅包含 `PATH`、locale、暫存目錄及常見 HTTP proxy 變數，並提供：
 
 - `${ARTIFACT_CACHE}`：`cache` 的絕對路徑。
 - `${ARTIFACT_OUTPUT}`：`output` 的絕對路徑；未設定時為空字串。
-- `${WORKSPACE}`：暫存 workspace。
-- `${REPOSITORY_DIR}`：clone 後的 repository 根目錄。
 
 例如 pip 只下載套件而不安裝：
 
 ```yaml
 output: ./artifacts/pip-files
 command:
-  executable: python3
-  args:
-    - -m
-    - pip
-    - download
-    - --destination-directory
-    - ${ARTIFACT_OUTPUT}
+  action: download
 ```
 
-命令不會交給 shell 執行；只有上述四個變數會由工具展開，避免 shell quoting 與 command injection 問題。
+命令不會交給 shell 執行。固定 executable、固定參數及最小環境可避免設定檔直接注入任意命令；但 Gradle、Maven 與其他套件工具仍可能執行 repository 內的建構邏輯，因此不可信 repository 仍應在容器或 OS sandbox 中執行。
+
+### 環境政策
+
+環境政策與任務設定分離。任務 YAML 不能指定環境變數、選擇 profile 或要求完整繼承；只有啟動 Artifact Downloader 的管理者能透過 CLI 選擇政策。
+
+範本位於 `examples/environment.yaml`，主要欄位：
+
+```yaml
+version: 1
+
+minimal:
+  inherit:
+    - PATH
+    - LANG
+  values: {}
+
+packageManagers:
+  pip:
+    inherit:
+      - VIRTUAL_ENV
+      - SSL_CERT_FILE
+    values:
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+    environmentFrom:
+      PIP_INDEX_URL:
+        source: COMPANY_PIP_INDEX_URL
+        required: false
+```
+
+- `minimal.inherit`：所有 package job 可從啟動程序繼承的變數。
+- `minimal.values`：所有 package job 使用的固定非敏感值。
+- `packageManagers.<manager>.inherit`：指定 package manager 額外繼承的變數。
+- `values`：該 package manager 使用的固定非敏感值。
+- `environmentFrom`：將啟動程序中的受保護變數映射成子程序需要的名稱；`required: true` 時缺少來源會使 job 失敗。
+
+Secret 值不可直接寫入政策檔。`ARTIFACT_CACHE`、`ARTIFACT_OUTPUT`、`HOME` 及各套件管理器 cache 變數由工具管理，政策若嘗試設定或繼承這些保留名稱，驗證會失敗。政策檔應存放在只有管理者可修改的位置，不應放在待下載的 repository 中。
 
 ### Git clone 參數、ADO PAT 與 Proxy
 

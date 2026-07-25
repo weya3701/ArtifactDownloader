@@ -1,0 +1,58 @@
+version: 1
+
+# 所有 package job 可繼承的基本環境。不存在的非必要變數會被忽略。
+minimal:
+  inherit:
+    - PATH
+    - LANG
+    - LC_ALL
+    - TMPDIR
+    - HTTP_PROXY
+    - HTTPS_PROXY
+    - NO_PROXY
+
+  # 固定值不得包含密碼或 token。
+  values: {}
+
+# 任務設定不能選擇 profile；工具會依 packageManager 自動套用這裡的政策。
+packageManagers:
+  pip:
+    inherit:
+      - VIRTUAL_ENV
+      - SSL_CERT_FILE
+      - SSL_CERT_DIR
+      - REQUESTS_CA_BUNDLE
+      - PIP_CONFIG_FILE
+      - PIP_TRUSTED_HOST
+
+    values:
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+
+    # 將啟動程序中的受保護變數映射成 pip 使用的名稱。
+    # Secret 值不要直接寫入此檔案。
+    environmentFrom:
+      PIP_INDEX_URL:
+        source: COMPANY_PIP_INDEX_URL
+        required: false
+      PIP_EXTRA_INDEX_URL:
+        source: COMPANY_PIP_EXTRA_INDEX_URL
+        required: false
+
+  gradle:
+    inherit:
+      - JAVA_HOME
+      - GRADLE_OPTS
+
+  mvn:
+    inherit:
+      - JAVA_HOME
+      - MAVEN_OPTS
+
+  npm:
+    inherit:
+      - NODE_EXTRA_CA_CERTS
+      - npm_config_registry
+
+  yarn:
+    inherit:
+      - NODE_EXTRA_CA_CERTS

@@ -10,9 +10,6 @@ jobs:
     workingDirectory: .
     packageManager: gradle
     command:
-      executable: ./gradlew
-      args:
-        - build
-        - --no-daemon
+      action: build
     cache: ../artifacts/gradle-cache
     timeout: 30m

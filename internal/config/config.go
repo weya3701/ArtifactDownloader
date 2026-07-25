@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"artifactdownloader/internal/packagecommand"
+
 	"gopkg.in/yaml.v3"
 )
 
@@ -37,20 +39,19 @@ type Config struct {
 }
 
 type Job struct {
-	Name             string            `yaml:"name"`
-	Type             string            `yaml:"type"`
-	Output           string            `yaml:"output"`
-	Cache            string            `yaml:"cache"`
-	URLList          string            `yaml:"urlList"`
-	Concurrency      int               `yaml:"concurrency"`
-	Timeout          Duration          `yaml:"timeout"`
-	Overwrite        bool              `yaml:"overwrite"`
-	Repository       Repository        `yaml:"repository"`
-	WorkingDirectory string            `yaml:"workingDirectory"`
-	PackageManager   string            `yaml:"packageManager"`
-	Command          Command           `yaml:"command"`
-	Callback         Command           `yaml:"callback"`
-	Environment      map[string]string `yaml:"environment"`
+	Name             string          `yaml:"name"`
+	Type             string          `yaml:"type"`
+	Output           string          `yaml:"output"`
+	Cache            string          `yaml:"cache"`
+	URLList          string          `yaml:"urlList"`
+	Concurrency      int             `yaml:"concurrency"`
+	Timeout          Duration        `yaml:"timeout"`
+	Overwrite        bool            `yaml:"overwrite"`
+	Repository       Repository      `yaml:"repository"`
+	WorkingDirectory string          `yaml:"workingDirectory"`
+	PackageManager   string          `yaml:"packageManager"`
+	Command          PackageCommand  `yaml:"command"`
+	Callback         ExternalCommand `yaml:"callback"`
 }
 
 type Repository struct {
@@ -61,7 +62,11 @@ type Repository struct {
 	CloneArgs []string `yaml:"cloneArgs"`
 }
 
-type Command struct {
+type PackageCommand struct {
+	Action string `yaml:"action"`
+}
+
+type ExternalCommand struct {
 	Executable string   `yaml:"executable"`
 	Args       []string `yaml:"args"`
 }
@@ -148,11 +153,14 @@ func (c Config) Validate() error {
 			if job.Repository.Depth < 0 {
 				return fmt.Errorf("job %q: repository.depth cannot be negative", job.Name)
 			}
-			if strings.TrimSpace(job.Command.Executable) == "" {
-				return fmt.Errorf("job %q: command.executable is required", job.Name)
-			}
 			if !supportedPackageManager(job.PackageManager) {
 				return fmt.Errorf("job %q: unsupported packageManager %q", job.Name, job.PackageManager)
+			}
+			if err := packagecommand.Validate(job.PackageManager, job.Command.Action); err != nil {
+				return fmt.Errorf("job %q: %w", job.Name, err)
+			}
+			if strings.EqualFold(job.PackageManager, "pip") && strings.EqualFold(job.Command.Action, "download") && strings.TrimSpace(job.Output) == "" {
+				return fmt.Errorf("job %q: output is required for pip action %q", job.Name, job.Command.Action)
 			}
 		case "":
 			return fmt.Errorf("job %q: type is required", job.Name)

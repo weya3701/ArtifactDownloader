@@ -23,3 +23,18 @@ func TestValidateCommand(t *testing.T) {
 		t.Fatalf("stdout = %q", stdout.String())
 	}
 }
+
+func TestRunRejectsConflictingEnvironmentOptions(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := run([]string{
+		"run", "--config", "unused.yaml",
+		"--environment-config", "environment.yaml",
+		"--inherit-environment",
+	}, &stdout, &stderr)
+	if code != 2 {
+		t.Fatalf("exit code = %d, want 2", code)
+	}
+	if !strings.Contains(stderr.String(), "cannot be used together") {
+		t.Fatalf("stderr = %q", stderr.String())
+	}
+}

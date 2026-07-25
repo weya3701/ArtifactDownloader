@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"artifactdownloader/internal/config"
+	"artifactdownloader/internal/environmentconfig"
 )
 
 func TestRunnerURLJob(t *testing.T) {
@@ -67,13 +68,13 @@ func TestRunnerExecutesCallbackAfterURLDownload(t *testing.T) {
 	cfg := config.Config{Version: 1, BaseDir: dir, Jobs: []config.Job{{
 		Name: "files", Type: config.JobTypeURLs, Output: "out", URLList: "urls.txt",
 		Concurrency: 1, Timeout: config.Duration(time.Minute),
-		Callback: config.Command{
+		Callback: config.ExternalCommand{
 			Executable: callback,
 			Args:       []string{"${ARTIFACT_OUTPUT}", "callback argument"},
 		},
 	}}}
 
-	results, err := (Runner{}).Run(context.Background(), cfg, "")
+	results, err := (Runner{AllowCallback: true}).Run(context.Background(), cfg, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,12 +98,22 @@ func TestSafeWorkingDirectoryRejectsEscape(t *testing.T) {
 
 func TestRunnerPackageJob(t *testing.T) {
 	dir := t.TempDir()
+	t.Setenv("POLICY_SOURCE_TEST", "from-policy")
+	binDir := filepath.Join(dir, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gradle := []byte("#!/bin/sh\nset -eu\ntest \"$1\" = build\ntest \"$2\" = --no-daemon\ntest \"$POLICY_TARGET_TEST\" = from-policy\nprintf artifact > \"$ARTIFACT_OUTPUT/result.txt\"\nprintf cache > \"$ARTIFACT_CACHE/cache-used.txt\"\n")
+	if err := os.WriteFile(filepath.Join(binDir, "gradle"), gradle, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
 	repositoryDir := filepath.Join(dir, "source")
 	if err := os.MkdirAll(filepath.Join(repositoryDir, "project"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	script := []byte("#!/bin/sh\nset -eu\ntest \"$TEST_CACHE\" = \"$GRADLE_USER_HOME\"\nprintf artifact > \"$ARTIFACT_OUTPUT/result.txt\"\nprintf cache > \"$ARTIFACT_CACHE/cache-used.txt\"\n")
-	if err := os.WriteFile(filepath.Join(repositoryDir, "project", "download.sh"), script, 0o755); err != nil {
+	if err := os.WriteFile(filepath.Join(repositoryDir, "project", "build.gradle"), []byte(""), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	git := func(args ...string) {
@@ -114,7 +125,7 @@ func TestRunnerPackageJob(t *testing.T) {
 		}
 	}
 	git("init", "-q")
-	git("add", "project/download.sh")
+	git("add", "project/build.gradle")
 	git("commit", "-q", "-m", "fixture")
 
 	cfg := config.Config{Version: 1, BaseDir: dir, Jobs: []config.Job{{
@@ -123,11 +134,22 @@ func TestRunnerPackageJob(t *testing.T) {
 			URL: repositoryDir, GitArgs: []string{"-c", "advice.detachedHead=false"},
 			CloneArgs: []string{"--no-tags"},
 		}, WorkingDirectory: "project",
-		PackageManager: "gradle", Command: config.Command{Executable: "./download.sh"},
-		Environment: map[string]string{"TEST_CACHE": "${ARTIFACT_CACHE}"}, Timeout: config.Duration(time.Minute),
+		PackageManager: "gradle", Command: config.PackageCommand{Action: "build"},
+		Timeout: config.Duration(time.Minute),
 	}}}
+	policy := environmentconfig.Config{
+		Version: 1,
+		Minimal: environmentconfig.Policy{Inherit: []string{"PATH"}},
+		PackageManagers: map[string]environmentconfig.PackagePolicy{
+			"gradle": {
+				EnvironmentFrom: map[string]environmentconfig.EnvSource{
+					"POLICY_TARGET_TEST": {Source: "POLICY_SOURCE_TEST", Required: true},
+				},
+			},
+		},
+	}
 	var output bytes.Buffer
-	results, err := (Runner{Stdout: &output, Stderr: &output}).Run(context.Background(), cfg, "")
+	results, err := (Runner{Stdout: &output, Stderr: &output, EnvironmentConfig: &policy}).Run(context.Background(), cfg, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -146,29 +168,33 @@ func TestRunnerPackageJob(t *testing.T) {
 	}
 }
 
-func TestApplyPackageCache(t *testing.T) {
-	tests := map[string]struct {
-		key string
-	}{
-		"gradle": {key: "GRADLE_USER_HOME"},
-		"npm":    {key: "npm_config_cache"},
-		"yarn":   {key: "YARN_CACHE_FOLDER"},
-		"pip":    {key: "PIP_CACHE_DIR"},
-	}
-	for manager, test := range tests {
-		t.Run(manager, func(t *testing.T) {
-			environment := map[string]string{}
-			applyPackageCache(manager, "/cache", environment)
-			if environment[test.key] != "/cache" {
-				t.Fatalf("%s = %q", test.key, environment[test.key])
-			}
-		})
-	}
-}
-
 func TestExpandVariables(t *testing.T) {
 	got := expandVariables("--dest=${ARTIFACT_CACHE}", map[string]string{"ARTIFACT_CACHE": "/cache"})
 	if got != "--dest=/cache" {
 		t.Fatalf("expandVariables() = %q", got)
+	}
+}
+
+func TestRunnerRejectsCallbackByDefault(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("downloaded"))
+	}))
+	defer server.Close()
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "urls.txt"), []byte(server.URL+"/artifact.bin\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Config{Version: 1, BaseDir: dir, Jobs: []config.Job{{
+		Name: "files", Type: config.JobTypeURLs, Output: "out", URLList: "urls.txt",
+		Concurrency: 1, Timeout: config.Duration(time.Minute),
+		Callback: config.ExternalCommand{Executable: "unused"},
+	}}}
+	results, err := (Runner{}).Run(context.Background(), cfg, "")
+	if err == nil {
+		t.Fatalf("Runner.Run() accepted a callback by default: %#v", results)
+	}
+	if _, statErr := os.Stat(filepath.Join(dir, "out", "artifact.bin")); !os.IsNotExist(statErr) {
+		t.Fatalf("job ran before callback authorization failed: %v", statErr)
 	}
 }

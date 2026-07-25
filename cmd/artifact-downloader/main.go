@@ -12,6 +12,7 @@ import (
 
 	"artifactdownloader/internal/application"
 	"artifactdownloader/internal/config"
+	"artifactdownloader/internal/environmentconfig"
 )
 
 func main() {
@@ -51,11 +52,18 @@ func run(args []string, stdout, stderr io.Writer) int {
 		jobName := flags.String("job", "", "run only the named job")
 		keepWorkspace := flags.Bool("keep-workspace", false, "retain package job workspaces")
 		verbose := flags.Bool("verbose", false, "show git and command output")
+		allowCallback := flags.Bool("allow-callback", false, "allow callbacks from trusted configuration")
+		environmentConfigPath := flags.String("environment-config", "", "path to a trusted environment policy")
+		inheritEnvironment := flags.Bool("inherit-environment", false, "inherit the complete process environment for trusted repositories")
 		if err := flags.Parse(args[1:]); err != nil {
 			return 2
 		}
 		if *configPath == "" || flags.NArg() != 0 {
 			fmt.Fprintln(stderr, "run requires --config and no positional arguments")
+			return 2
+		}
+		if *environmentConfigPath != "" && *inheritEnvironment {
+			fmt.Fprintln(stderr, "--environment-config and --inherit-environment cannot be used together")
 			return 2
 		}
 		cfg, err := config.Load(*configPath)
@@ -64,9 +72,24 @@ func run(args []string, stdout, stderr io.Writer) int {
 			return 2
 		}
 
+		var environmentPolicy *environmentconfig.Config
+		if *environmentConfigPath != "" {
+			loaded, err := environmentconfig.Load(*environmentConfigPath)
+			if err != nil {
+				fmt.Fprintf(stderr, "invalid environment configuration: %v\n", err)
+				return 2
+			}
+			environmentPolicy = &loaded
+		}
+
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
-		runner := application.Runner{KeepWorkspace: *keepWorkspace}
+		runner := application.Runner{
+			KeepWorkspace:      *keepWorkspace,
+			AllowCallback:      *allowCallback,
+			EnvironmentConfig:  environmentPolicy,
+			InheritEnvironment: *inheritEnvironment,
+		}
 		if *verbose {
 			runner.Stdout = stdout
 			runner.Stderr = stderr
@@ -112,4 +135,5 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "Usage:")
 	fmt.Fprintln(w, "  artifact-downloader validate --config <file>")
 	fmt.Fprintln(w, "  artifact-downloader run --config <file> [--job <name>] [--keep-workspace] [--verbose]")
+	fmt.Fprintln(w, "      [--environment-config <file> | --inherit-environment] [--allow-callback]")
 }

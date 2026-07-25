@@ -43,7 +43,7 @@ func TestLoadRejectsUnknownFields(t *testing.T) {
 func TestPackageRequiresCache(t *testing.T) {
 	cfg := Config{Version: 1, Jobs: []Job{{
 		Name: "build", Type: JobTypePackage, Repository: Repository{URL: "repo"},
-		PackageManager: "gradle", Command: Command{Executable: "./gradlew"},
+		PackageManager: "gradle", Command: PackageCommand{Action: "build"},
 		Timeout: Duration(time.Minute),
 	}}}
 	if err := cfg.Validate(); err == nil {
@@ -67,7 +67,7 @@ jobs:
       cloneArgs:
         - --no-tags
     command:
-      executable: ./gradlew
+      action: build
 `)
 	if err := os.WriteFile(path, data, 0o600); err != nil {
 		t.Fatal(err)
@@ -86,9 +86,41 @@ func TestCallbackArgsRequireExecutable(t *testing.T) {
 	cfg := Config{Version: 1, Jobs: []Job{{
 		Name: "files", Type: JobTypeURLs, Output: "out", URLList: "urls.txt",
 		Concurrency: 1, Timeout: Duration(time.Minute),
-		Callback: Command{Args: []string{"done"}},
+		Callback: ExternalCommand{Args: []string{"done"}},
 	}}}
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("Validate() accepted callback args without executable")
+	}
+}
+
+func TestPackageRejectsUnknownAction(t *testing.T) {
+	cfg := Config{Version: 1, Jobs: []Job{{
+		Name: "build", Type: JobTypePackage, Cache: "cache",
+		Repository: Repository{URL: "repo"}, PackageManager: "gradle",
+		Command: PackageCommand{Action: "custom"}, Timeout: Duration(time.Minute),
+	}}}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("Validate() accepted an unknown package action")
+	}
+}
+
+func TestLoadRejectsLegacyPackageCommand(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	data := []byte(`version: 1
+jobs:
+  - name: build
+    type: package
+    cache: cache
+    packageManager: gradle
+    repository:
+      url: repo
+    command:
+      executable: ./gradlew
+`)
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path); err == nil {
+		t.Fatal("Load() accepted legacy package executable")
 	}
 }

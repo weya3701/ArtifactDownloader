@@ -14,15 +14,20 @@ import (
 
 	"artifactdownloader/internal/config"
 	"artifactdownloader/internal/downloader"
+	"artifactdownloader/internal/environmentconfig"
 	"artifactdownloader/internal/executor"
+	"artifactdownloader/internal/packagecommand"
 	"artifactdownloader/internal/report"
 	"artifactdownloader/internal/repository"
 )
 
 type Runner struct {
-	Stdout        io.Writer
-	Stderr        io.Writer
-	KeepWorkspace bool
+	Stdout             io.Writer
+	Stderr             io.Writer
+	KeepWorkspace      bool
+	AllowCallback      bool
+	EnvironmentConfig  *environmentconfig.Config
+	InheritEnvironment bool
 }
 
 func (r Runner) Run(ctx context.Context, cfg config.Config, selectedJob string) ([]report.Result, error) {
@@ -37,6 +42,13 @@ func (r Runner) Run(ctx context.Context, cfg config.Config, selectedJob string) 
 		}
 		if len(jobs) == 0 {
 			return nil, fmt.Errorf("job %q not found", selectedJob)
+		}
+	}
+	if !r.AllowCallback {
+		for _, job := range jobs {
+			if job.Callback.Executable != "" {
+				return nil, fmt.Errorf("job %q: callback is disabled; use --allow-callback only for trusted configuration", job.Name)
+			}
 		}
 	}
 
@@ -87,9 +99,10 @@ func (r Runner) runCallback(ctx context.Context, cfg config.Config, job config.J
 
 	runner := executor.Command{}
 	if err := runner.Run(ctx, executable, args, executor.Options{
-		Directory: cfg.BaseDir,
-		Stdout:    r.output(),
-		Stderr:    r.errorOutput(),
+		Directory:          cfg.BaseDir,
+		InheritEnvironment: true,
+		Stdout:             r.output(),
+		Stderr:             r.errorOutput(),
 	}); err != nil {
 		return fmt.Errorf("callback: %w", err)
 	}
@@ -238,50 +251,38 @@ func (r Runner) runPackage(ctx context.Context, cfg config.Config, job config.Jo
 		}
 	}
 
-	variables := map[string]string{
-		"ARTIFACT_CACHE":  cache,
-		"ARTIFACT_OUTPUT": output,
-		"WORKSPACE":       workspace,
-		"REPOSITORY_DIR":  repositoryDir,
+	spec, err := packagecommand.Resolve(job.PackageManager, job.Command.Action, packagecommand.Variables{
+		Cache: cache, Output: output, Home: workspace,
+	})
+	if err != nil {
+		return fmt.Errorf("resolve package command: %w", err)
 	}
-	environment := make(map[string]string, len(job.Environment)+6)
-	for key, value := range job.Environment {
-		environment[key] = expandVariables(value, variables)
-	}
-	environment["ARTIFACT_CACHE"] = cache
-	environment["ARTIFACT_OUTPUT"] = output
-	applyPackageCache(job.PackageManager, cache, environment)
 
-	executable := expandVariables(job.Command.Executable, variables)
-	args := make([]string, len(job.Command.Args))
-	for i, arg := range job.Command.Args {
-		args[i] = expandVariables(arg, variables)
-	}
-	if strings.EqualFold(job.PackageManager, "mvn") {
-		args = append(args, "-Dmaven.repo.local="+cache)
+	environment := spec.Environment
+	if r.InheritEnvironment {
+		delete(environment, "HOME")
+	} else {
+		policy := environmentconfig.Default()
+		if r.EnvironmentConfig != nil {
+			policy = *r.EnvironmentConfig
+		}
+		environment, err = policy.Build(job.PackageManager)
+		if err != nil {
+			return fmt.Errorf("build package environment: %w", err)
+		}
+		for name, value := range spec.Environment {
+			environment[name] = value
+		}
 	}
 
 	runner := executor.Command{}
-	if err := runner.Run(ctx, executable, args, executor.Options{
-		Directory: workingDir, Environment: environment,
+	if err := runner.Run(ctx, spec.Executable, spec.Args, executor.Options{
+		Directory: workingDir, Environment: environment, InheritEnvironment: r.InheritEnvironment,
 		Stdout: r.output(), Stderr: r.errorOutput(),
 	}); err != nil {
 		return err
 	}
 	return nil
-}
-
-func applyPackageCache(manager, cache string, environment map[string]string) {
-	switch strings.ToLower(manager) {
-	case "gradle":
-		environment["GRADLE_USER_HOME"] = cache
-	case "npm":
-		environment["npm_config_cache"] = cache
-	case "yarn":
-		environment["YARN_CACHE_FOLDER"] = cache
-	case "pip":
-		environment["PIP_CACHE_DIR"] = cache
-	}
 }
 
 func expandVariables(value string, variables map[string]string) string {

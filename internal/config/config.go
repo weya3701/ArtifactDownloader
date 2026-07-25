@@ -49,6 +49,7 @@ type Job struct {
 	WorkingDirectory string            `yaml:"workingDirectory"`
 	PackageManager   string            `yaml:"packageManager"`
 	Command          Command           `yaml:"command"`
+	Callback         Command           `yaml:"callback"`
 	Environment      map[string]string `yaml:"environment"`
 }
 
@@ -121,6 +122,9 @@ func (c Config) Validate() error {
 		names[job.Name] = struct{}{}
 		if job.Timeout.Value() <= 0 {
 			return fmt.Errorf("job %q: timeout must be positive", job.Name)
+		}
+		if len(job.Callback.Args) > 0 && strings.TrimSpace(job.Callback.Executable) == "" {
+			return fmt.Errorf("job %q: callback.executable is required when callback.args is set", job.Name)
 		}
 
 		switch job.Type {

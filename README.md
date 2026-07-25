@@ -56,6 +56,20 @@ jobs:
 
 設定檔內的 `output` 與 `urlList` 均相對於 YAML 所在目錄解析。
 
+### 下載完成 Callback
+
+每個 job 都可設定 `callback`。只有主要下載流程成功後才會執行；callback 命令失敗時，該 job 也會回報失敗。命令與參數需分開設定：
+
+```yaml
+callback:
+  executable: ./scripts/download-complete.sh
+  args:
+    - ${ARTIFACT_OUTPUT}
+    - --notify
+```
+
+Callback 的工作目錄是 YAML 設定檔所在目錄。命令不會交給 shell 執行，因此 `args` 中的每一項都會原樣作為獨立參數傳入。可在 `executable` 與 `args` 使用 `${ARTIFACT_OUTPUT}` 和 `${ARTIFACT_CACHE}`；未設定的路徑會展開為空字串。
+
 ### Package 模式
 
 ```yaml

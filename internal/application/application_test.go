@@ -49,6 +49,46 @@ func TestRunnerURLJob(t *testing.T) {
 	}
 }
 
+func TestRunnerExecutesCallbackAfterURLDownload(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("downloaded"))
+	}))
+	defer server.Close()
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "urls.txt"), []byte(server.URL+"/artifact.bin\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	callback := filepath.Join(dir, "callback.sh")
+	script := []byte("#!/bin/sh\nset -eu\ntest -f \"$1/artifact.bin\"\nprintf '%s' \"$2\" > \"$1/callback.txt\"\n")
+	if err := os.WriteFile(callback, script, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Config{Version: 1, BaseDir: dir, Jobs: []config.Job{{
+		Name: "files", Type: config.JobTypeURLs, Output: "out", URLList: "urls.txt",
+		Concurrency: 1, Timeout: config.Duration(time.Minute),
+		Callback: config.Command{
+			Executable: callback,
+			Args:       []string{"${ARTIFACT_OUTPUT}", "callback argument"},
+		},
+	}}}
+
+	results, err := (Runner{}).Run(context.Background(), cfg, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 1 || results[0].Err != nil {
+		t.Fatalf("unexpected results: %#v", results)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "out", "callback.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "callback argument" {
+		t.Fatalf("callback content = %q", data)
+	}
+}
+
 func TestSafeWorkingDirectoryRejectsEscape(t *testing.T) {
 	if _, err := safeWorkingDirectory("/tmp/repo", "../../etc"); err == nil {
 		t.Fatal("safeWorkingDirectory accepted escaping path")

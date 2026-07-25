@@ -81,3 +81,14 @@ jobs:
 		t.Fatalf("unexpected repository arguments: %#v", repository)
 	}
 }
+
+func TestCallbackArgsRequireExecutable(t *testing.T) {
+	cfg := Config{Version: 1, Jobs: []Job{{
+		Name: "files", Type: JobTypeURLs, Output: "out", URLList: "urls.txt",
+		Concurrency: 1, Timeout: Duration(time.Minute),
+		Callback: Command{Args: []string{"done"}},
+	}}}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("Validate() accepted callback args without executable")
+	}
+}

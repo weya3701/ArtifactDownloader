@@ -64,11 +64,43 @@ func (r Runner) runJob(parent context.Context, cfg config.Config, job config.Job
 	default:
 		result.Err = fmt.Errorf("unsupported job type %q", job.Type)
 	}
+	if result.Err == nil && job.Callback.Executable != "" {
+		result.Err = r.runCallback(ctx, cfg, job)
+	}
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		result.Err = fmt.Errorf("job timed out after %s: %w", job.Timeout.Value(), result.Err)
 	}
 	result.Duration = time.Since(result.StartedAt)
 	return result
+}
+
+func (r Runner) runCallback(ctx context.Context, cfg config.Config, job config.Job) error {
+	variables := map[string]string{
+		"ARTIFACT_CACHE":  resolveOptional(cfg, job.Cache),
+		"ARTIFACT_OUTPUT": resolveOptional(cfg, job.Output),
+	}
+	executable := expandVariables(job.Callback.Executable, variables)
+	args := make([]string, len(job.Callback.Args))
+	for i, arg := range job.Callback.Args {
+		args[i] = expandVariables(arg, variables)
+	}
+
+	runner := executor.Command{}
+	if err := runner.Run(ctx, executable, args, executor.Options{
+		Directory: cfg.BaseDir,
+		Stdout:    r.output(),
+		Stderr:    r.errorOutput(),
+	}); err != nil {
+		return fmt.Errorf("callback: %w", err)
+	}
+	return nil
+}
+
+func resolveOptional(cfg config.Config, path string) string {
+	if path == "" {
+		return ""
+	}
+	return cfg.Resolve(path)
 }
 
 func (r Runner) runURLs(ctx context.Context, cfg config.Config, job config.Job) (int, error) {

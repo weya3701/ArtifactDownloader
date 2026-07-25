@@ -15,10 +15,14 @@ import (
 	"artifactdownloader/internal/environmentconfig"
 )
 
+// main 以實際程序參數及標準輸出入呼叫 run，並將其輸出設為程序結束碼。
+// 輸入來自 os.Args；輸出為程序 exit code，不直接回傳值。
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 }
 
+// run 解析 validate/run CLI、載入設定、執行工作並輸出摘要。
+// 輸入為不含程式名的 args 與 stdout/stderr writer；輸出為 0、1、2 或 130 結束碼。
 func run(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		printUsage(stderr)
@@ -131,6 +135,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 }
 
+// printUsage 將支援的 CLI 語法寫入指定 writer。
+// 輸入為輸出目的 w；輸出透過 writer 產生，函式本身沒有回傳值。
 func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "Usage:")
 	fmt.Fprintln(w, "  artifact-downloader validate --config <file>")

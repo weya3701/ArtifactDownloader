@@ -9,23 +9,27 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// Config 表示獨立於任務 YAML 的完整受信任環境政策。
 type Config struct {
 	Version         int                      `yaml:"version"`
 	Minimal         Policy                   `yaml:"minimal"`
 	PackageManagers map[string]PackagePolicy `yaml:"packageManagers"`
 }
 
+// Policy 描述所有 package job 共用的繼承名稱與固定非敏感值。
 type Policy struct {
 	Inherit []string          `yaml:"inherit"`
 	Values  map[string]string `yaml:"values"`
 }
 
+// PackagePolicy 描述單一 package manager 額外允許的繼承、固定值與來源映射。
 type PackagePolicy struct {
 	Inherit         []string             `yaml:"inherit"`
 	Values          map[string]string    `yaml:"values"`
 	EnvironmentFrom map[string]EnvSource `yaml:"environmentFrom"`
 }
 
+// EnvSource 指定目標環境變數應從啟動程序的哪個名稱取得，以及是否必須存在。
 type EnvSource struct {
 	Source   string `yaml:"source"`
 	Required bool   `yaml:"required"`
@@ -43,6 +47,8 @@ var reserved = map[string]struct{}{
 	"HOME":              {},
 }
 
+// Default 建立未提供政策檔時使用的內建最小環境政策。
+// 函式沒有輸入；輸出為只繼承 PATH、locale、暫存目錄與 proxy 的 Config。
 func Default() Config {
 	return Config{
 		Version: 1,
@@ -54,6 +60,8 @@ func Default() Config {
 	}
 }
 
+// Load 從檔案嚴格解析並驗證受信任環境政策。
+// 輸入為政策檔 path；輸出為 Config，讀取、未知欄位或安全規則失敗時輸出錯誤。
 func Load(path string) (Config, error) {
 	file, err := os.Open(path)
 	if err != nil {
@@ -73,6 +81,8 @@ func Load(path string) (Config, error) {
 	return cfg, nil
 }
 
+// Validate 檢查版本、manager 名稱、環境變數格式及保留變數衝突。
+// 輸入為環境 Config；合法時輸出 nil，第一個政策問題輸出錯誤。
 func (c Config) Validate() error {
 	if c.Version != 1 {
 		return fmt.Errorf("unsupported environment config version %d (expected 1)", c.Version)
@@ -107,6 +117,8 @@ func (c Config) Validate() error {
 	return nil
 }
 
+// validatePolicy 驗證一段政策中的繼承名稱與固定值名稱。
+// 輸入為錯誤路徑 prefix、inherit 清單及 values；合法時輸出 nil，否則輸出定位錯誤。
 func validatePolicy(prefix string, inherit []string, values map[string]string) error {
 	for _, name := range inherit {
 		if !environmentName.MatchString(name) {
@@ -124,6 +136,8 @@ func validatePolicy(prefix string, inherit []string, values map[string]string) e
 	return nil
 }
 
+// validateWritableName 確認政策目標名稱格式合法且不是工具保留變數。
+// 輸入為錯誤路徑 prefix 與變數 name；可寫入時輸出 nil，否則輸出錯誤。
 func validateWritableName(prefix, name string) error {
 	if !environmentName.MatchString(name) {
 		return fmt.Errorf("%s contains invalid environment variable name %q", prefix, name)
@@ -134,6 +148,8 @@ func validateWritableName(prefix, name string) error {
 	return nil
 }
 
+// Build 依共同政策及指定 manager 政策建立乾淨的子程序環境。
+// 輸入為 package manager 名稱；輸出為環境名稱到值的映射，必要來源缺少時輸出錯誤。
 func (c Config) Build(manager string) (map[string]string, error) {
 	if err := c.Validate(); err != nil {
 		return nil, err
@@ -162,6 +178,8 @@ func (c Config) Build(manager string) (map[string]string, error) {
 	return result, nil
 }
 
+// inherit 將啟動程序中存在且被明確列出的變數複製到目的映射。
+// 輸入為可修改 destination 與名稱清單；輸出直接寫入 destination，沒有回傳值。
 func inherit(destination map[string]string, names []string) {
 	for _, name := range names {
 		if value, exists := os.LookupEnv(name); exists {

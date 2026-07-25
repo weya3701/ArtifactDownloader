@@ -12,10 +12,13 @@ import (
 	"strings"
 )
 
+// HTTP 是可注入 http.Client 的下載器；Client 為 nil 時使用 http.DefaultClient。
 type HTTP struct {
 	Client *http.Client
 }
 
+// Download 以 GET 下載 HTTP/HTTPS 內容，先同步寫入暫存檔，再原子發布到目的路徑。
+// 輸入為 context、來源 URL、目的檔及覆寫旗標；成功輸出 nil，HTTP、檔案或取消問題輸出錯誤。
 func (d HTTP) Download(ctx context.Context, sourceURL, destination string, overwrite bool) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, sourceURL, nil)
 	if err != nil {
@@ -75,6 +78,8 @@ func (d HTTP) Download(ctx context.Context, sourceURL, destination string, overw
 	return nil
 }
 
+// Filename 從 HTTP/HTTPS URL path 的最後一段解析安全目的檔名。
+// 輸入為原始 URL；輸出為解碼後且不含路徑分隔符的檔名，無效 scheme/host/path 時輸出錯誤。
 func Filename(rawURL string) (string, error) {
 	parsed, err := url.Parse(rawURL)
 	if err != nil {

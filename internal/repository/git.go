@@ -12,6 +12,7 @@ import (
 	"artifactdownloader/internal/config"
 )
 
+// Git 封裝系統 git 命令及其標準輸出目的地。
 type Git struct {
 	Stdout io.Writer
 	Stderr io.Writer
@@ -19,6 +20,8 @@ type Git struct {
 
 var environmentReference = regexp.MustCompile(`\$\{[A-Za-z_][A-Za-z0-9_]*\}`)
 
+// Clone 依 Repository 設定 clone 到 destination，並選擇性 detached checkout 指定 ref。
+// 輸入為 context、repository 設定與目的目錄；成功輸出 nil，參數展開、clone 或 checkout 失敗輸出錯誤。
 func (g Git) Clone(ctx context.Context, repository config.Repository, destination string) error {
 	gitArgs, err := expandEnvironmentArgs(repository.GitArgs)
 	if err != nil {
@@ -49,6 +52,8 @@ func (g Git) Clone(ctx context.Context, repository config.Repository, destinatio
 	return nil
 }
 
+// run 在指定目錄以 context 執行一次系統 git 命令。
+// 輸入為 context、可留空的工作目錄與 Git 參數；成功輸出 nil，命令失敗輸出錯誤。
 func (g Git) run(ctx context.Context, directory string, args ...string) error {
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = directory
@@ -60,6 +65,8 @@ func (g Git) run(ctx context.Context, directory string, args ...string) error {
 	return nil
 }
 
+// expandEnvironmentArgs 將 Git 參數中的 ${ENV_VAR} 以啟動程序環境值替換。
+// 輸入為原始參數切片；輸出為新參數切片，任何被引用變數不存在時輸出錯誤。
 func expandEnvironmentArgs(args []string) ([]string, error) {
 	expanded := make([]string, len(args))
 	for i, arg := range args {

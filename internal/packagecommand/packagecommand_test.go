@@ -13,11 +13,12 @@ func TestResolveAllowedCommands(t *testing.T) {
 		args       []string
 		cacheKey   string
 	}{
-		"gradle": {"gradle", "build", "gradle", []string{"build", "--no-daemon"}, "GRADLE_USER_HOME"},
-		"maven":  {"mvn", "build", "mvn", []string{"package", "--batch-mode", "-Dmaven.repo.local=/cache"}, ""},
-		"npm":    {"npm", "install", "npm", []string{"ci", "--ignore-scripts"}, "npm_config_cache"},
-		"yarn":   {"yarn", "install", "yarn", []string{"install", "--immutable", "--ignore-scripts"}, "YARN_CACHE_FOLDER"},
-		"pip":    {"pip", "download", "python3", []string{"-m", "pip", "download", "-r", "requirements.txt", "--dest", "/output"}, "PIP_CACHE_DIR"},
+		"gradle":       {"gradle", "build", "gradle", []string{"build", "--no-daemon"}, "GRADLE_USER_HOME"},
+		"maven":        {"mvn", "build", "mvn", []string{"package", "--batch-mode", "-Dmaven.repo.local=/cache"}, ""},
+		"npm":          {"npm", "install", "npm", []string{"ci", "--ignore-scripts"}, "npm_config_cache"},
+		"npm unlocked": {"npm", "install-unlocked", "npm", []string{"install", "--ignore-scripts", "--no-package-lock"}, "npm_config_cache"},
+		"yarn":         {"yarn", "install", "yarn", []string{"install", "--immutable", "--ignore-scripts"}, "YARN_CACHE_FOLDER"},
+		"pip":          {"pip", "download", "python3", []string{"-m", "pip", "download", "-r", "requirements.txt", "--dest", "/output"}, "PIP_CACHE_DIR"},
 	}
 
 	for name, test := range tests {

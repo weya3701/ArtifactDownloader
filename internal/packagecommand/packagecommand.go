@@ -28,7 +28,7 @@ func Validate(manager, action string) error {
 		return fmt.Errorf("command.action is required")
 	}
 	switch manager + ":" + action {
-	case "gradle:build", "mvn:build", "npm:install", "yarn:install", "pip:download":
+	case "gradle:build", "mvn:build", "npm:install", "npm:install-unlocked", "yarn:install", "pip:download":
 		return nil
 	default:
 		return fmt.Errorf("action %q is not allowed for packageManager %q", action, manager)
@@ -63,6 +63,10 @@ func Resolve(manager, action string, variables Variables) (Spec, error) {
 	case "npm:install":
 		spec.Executable = "npm"
 		spec.Args = []string{"ci", "--ignore-scripts"}
+		spec.Environment["npm_config_cache"] = variables.Cache
+	case "npm:install-unlocked":
+		spec.Executable = "npm"
+		spec.Args = []string{"install", "--ignore-scripts", "--no-package-lock"}
 		spec.Environment["npm_config_cache"] = variables.Cache
 	case "yarn:install":
 		spec.Executable = "yarn"

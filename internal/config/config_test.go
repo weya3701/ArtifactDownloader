@@ -104,6 +104,17 @@ func TestPackageRejectsUnknownAction(t *testing.T) {
 	}
 }
 
+func TestPackageAcceptsNPMInstallUnlocked(t *testing.T) {
+	cfg := Config{Version: 1, Jobs: []Job{{
+		Name: "npm-unlocked", Type: JobTypePackage, Cache: "cache",
+		Repository: Repository{URL: "repo"}, PackageManager: "npm",
+		Command: PackageCommand{Action: "install-unlocked"}, Timeout: Duration(time.Minute),
+	}}}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() rejected npm install-unlocked: %v", err)
+	}
+}
+
 func TestLoadRejectsLegacyPackageCommand(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	data := []byte(`version: 1

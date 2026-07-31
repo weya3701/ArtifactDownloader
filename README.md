@@ -1,5 +1,7 @@
 ## Artifact Downloader
 
+完整的安裝步驟、CLI 操作、設定欄位、各套件管理器與私有來源、Proxy、Callback、CI 及排錯場景，請參閱[使用者操作與設定手冊](docs/USER_GUIDE.zh-TW.md)。
+
 Artifact Downloader 是以 YAML 操作的命令列工具，支援兩種工作模式：
 
 - 從文字檔讀取多個 HTTP/HTTPS URL，並行下載至指定目錄。
@@ -120,7 +122,7 @@ jobs:
    `output`，該產物也會保留。
 7. 成功或失敗後清除 workspace，除非指定 `--keep-workspace`。
 
-`cache` 是 package job 的必填欄位。除 pip `download` action 外，`output` 是選填路徑。npm job 設定 `output` 時，工具會在 `npm ci` 成功後複製 `node_modules`；未設定時仍只執行暫存安裝。其他 package manager 不會自動複製建構產物，repository 內的建構邏輯必須明確將產物寫入 `ARTIFACT_OUTPUT` 指定的目錄。
+`cache` 是 package job 的必填欄位。除 pip `download` action 外，`output` 是選填路徑。npm job 設定 `output` 時，工具會在安裝成功後複製 `node_modules`；未設定時仍只執行暫存安裝。其他 package manager 不會自動複製建構產物，repository 內的建構邏輯必須明確將產物寫入 `ARTIFACT_OUTPUT` 指定的目錄。
 
 Package job 不接受自訂 executable、args 或 environment。無法匹配的 manager/action 會在設定驗證階段被拒絕。工具只使用系統安裝的 package manager，不執行 repository 內的 `gradlew` 或 `mvnw` wrapper。
 
@@ -131,8 +133,20 @@ Package job 不接受自訂 executable、args 或 environment。無法匹配的 
 | Gradle | `build` | `gradle build --no-daemon` |
 | Maven | `build` | `mvn package --batch-mode` |
 | npm | `install` | `npm ci --ignore-scripts` |
+| npm | `install-unlocked` | `npm install --ignore-scripts --no-package-lock` |
 | Yarn | `install` | `yarn install --immutable --ignore-scripts` |
 | pip | `download` | `python3 -m pip download -r requirements.txt --dest <output>` |
+
+npm 專案有 `package-lock.json` 或 `npm-shrinkwrap.json` 時應優先使用
+`install`，以取得可重現的依賴版本。只有無 lockfile 的專案才使用
+`install-unlocked`；它不會產生 lockfile，實際解析的依賴版本可能隨 registry
+內容變動：
+
+```yaml
+packageManager: npm
+command:
+  action: install-unlocked
+```
 
 工具會依 `packageManager` 自動設定 cache：
 

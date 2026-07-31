@@ -1,0 +1,18 @@
+version: 1
+
+jobs:
+  - name: download-npm-dependencies
+    type: package
+    repository:
+      # 請替換成包含 package.json 與 package-lock.json 的 Git repository。
+      url: https://github.com/expressjs/express.git
+      ref: master
+      depth: 1
+    # 若 package.json 位於子目錄，請改成該子目錄路徑。
+    workingDirectory: .
+    packageManager: npm
+    command:
+      action: install
+    # npm 下載的套件封裝檔會保留在此 cache 目錄。
+    cache: ../artifacts/npm-cache
+    timeout: 30m

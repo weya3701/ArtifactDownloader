@@ -115,10 +115,12 @@ jobs:
 3. 切換至 `workingDirectory`。
 4. 將套件管理器的 cache 指向設定的 `cache` 目錄。
 5. 依 `packageManager` 與 `command.action` 選擇內建的固定命令，由建構或安裝流程下載依賴。
-6. 將 cache 保留在 workspace 外；若命令自行寫入 `output`，該產物也會保留。
+6. 將 cache 保留在 workspace 外；npm job 若設定 `output`，會將安裝完成的
+   `node_modules` 保留到 `<output>/node_modules`。其他 manager 若命令自行寫入
+   `output`，該產物也會保留。
 7. 成功或失敗後清除 workspace，除非指定 `--keep-workspace`。
 
-`cache` 是 package job 的必填欄位。除 pip `download` action 外，`output` 是選填路徑；工具不會自動複製建構產物，repository 內的建構邏輯必須明確將產物寫入 `ARTIFACT_OUTPUT` 指定的目錄。
+`cache` 是 package job 的必填欄位。除 pip `download` action 外，`output` 是選填路徑。npm job 設定 `output` 時，工具會在 `npm ci` 成功後複製 `node_modules`；未設定時仍只執行暫存安裝。其他 package manager 不會自動複製建構產物，repository 內的建構邏輯必須明確將產物寫入 `ARTIFACT_OUTPUT` 指定的目錄。
 
 Package job 不接受自訂 executable、args 或 environment。無法匹配的 manager/action 會在設定驗證階段被拒絕。工具只使用系統安裝的 package manager，不執行 repository 內的 `gradlew` 或 `mvnw` wrapper。
 

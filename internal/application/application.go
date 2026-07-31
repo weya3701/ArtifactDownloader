@@ -297,6 +297,42 @@ func (r Runner) runPackage(ctx context.Context, cfg config.Config, job config.Jo
 	}); err != nil {
 		return err
 	}
+	if strings.EqualFold(job.PackageManager, "npm") && output != "" {
+		if err := retainNPMInstall(workingDir, output); err != nil {
+			return fmt.Errorf("retain npm install: %w", err)
+		}
+	}
+	return nil
+}
+
+// retainNPMInstall 將 npm ci 產生的 node_modules 複製到持久化 output/node_modules。
+// 輸入為 npm 工作目錄與已解析的 output；成功時以本次安裝結果取代舊內容。
+func retainNPMInstall(workingDir, output string) error {
+	source := filepath.Join(workingDir, "node_modules")
+	if stat, err := os.Stat(source); err != nil {
+		return fmt.Errorf("inspect source node_modules: %w", err)
+	} else if !stat.IsDir() {
+		return fmt.Errorf("source node_modules is not a directory: %s", source)
+	}
+
+	staging, err := os.MkdirTemp(output, ".node_modules-*")
+	if err != nil {
+		return fmt.Errorf("create staging directory: %w", err)
+	}
+	defer os.RemoveAll(staging)
+
+	stagedModules := filepath.Join(staging, "node_modules")
+	if err := os.CopyFS(stagedModules, os.DirFS(source)); err != nil {
+		return fmt.Errorf("copy node_modules: %w", err)
+	}
+
+	destination := filepath.Join(output, "node_modules")
+	if err := os.RemoveAll(destination); err != nil {
+		return fmt.Errorf("remove previous node_modules: %w", err)
+	}
+	if err := os.Rename(stagedModules, destination); err != nil {
+		return fmt.Errorf("publish node_modules: %w", err)
+	}
 	return nil
 }
 

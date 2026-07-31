@@ -175,6 +175,36 @@ func TestExpandVariables(t *testing.T) {
 	}
 }
 
+func TestRetainNPMInstall(t *testing.T) {
+	dir := t.TempDir()
+	workingDir := filepath.Join(dir, "repository")
+	sourcePackage := filepath.Join(workingDir, "node_modules", "example-package")
+	output := filepath.Join(dir, "output")
+	if err := os.MkdirAll(sourcePackage, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(output, "node_modules", "stale-package"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sourcePackage, "index.js"), []byte("module.exports = true"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := retainNPMInstall(workingDir, output); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(output, "node_modules", "example-package", "index.js"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "module.exports = true" {
+		t.Fatalf("retained package content = %q", data)
+	}
+	if _, err := os.Stat(filepath.Join(output, "node_modules", "stale-package")); !os.IsNotExist(err) {
+		t.Fatalf("stale package was not removed: %v", err)
+	}
+}
+
 func TestRunnerRejectsCallbackByDefault(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte("downloaded"))

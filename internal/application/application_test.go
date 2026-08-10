@@ -26,15 +26,16 @@ func TestRunnerURLJob(t *testing.T) {
 	defer server.Close()
 
 	dir := t.TempDir()
+	t.Setenv("ARTIFACT_DOWNLOADER_URL_OUTPUT_TEST", "out")
 	if err := os.WriteFile(filepath.Join(dir, "urls.txt"), []byte(server.URL+"/artifact.bin\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	cfg := config.Config{Version: 1, BaseDir: dir, Jobs: []config.Job{{
-		Name: "files", Type: config.JobTypeURLs, Output: "out", URLList: "urls.txt",
+		Name: "files", Type: config.JobTypeURLs, Output: "${ARTIFACT_DOWNLOADER_URL_OUTPUT_TEST}", URLList: "urls.txt",
 		Concurrency: 2, Timeout: config.Duration(time.Minute),
 	}}}
 
-	results, err := (Runner{}).Run(context.Background(), cfg, "")
+	results, err := (Runner{InheritEnvironment: true}).Run(context.Background(), cfg, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -50,7 +51,7 @@ func TestRunnerURLJob(t *testing.T) {
 	}
 }
 
-func TestRunnerExecutesCallbackAfterURLDownload(t *testing.T) {
+func TestRunnerExecutesCallbacksInConfiguredOrderAfterURLDownload(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte("downloaded"))
 	}))
@@ -61,16 +62,16 @@ func TestRunnerExecutesCallbackAfterURLDownload(t *testing.T) {
 		t.Fatal(err)
 	}
 	callback := filepath.Join(dir, "callback.sh")
-	script := []byte("#!/bin/sh\nset -eu\ntest -f \"$1/artifact.bin\"\nprintf '%s' \"$2\" > \"$1/callback.txt\"\n")
+	script := []byte("#!/bin/sh\nset -eu\ntest -f \"$1/artifact.bin\"\nprintf '%s\\n' \"$2\" >> \"$1/callback.txt\"\n")
 	if err := os.WriteFile(callback, script, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	cfg := config.Config{Version: 1, BaseDir: dir, Jobs: []config.Job{{
 		Name: "files", Type: config.JobTypeURLs, Output: "out", URLList: "urls.txt",
 		Concurrency: 1, Timeout: config.Duration(time.Minute),
-		Callback: config.ExternalCommand{
-			Executable: callback,
-			Args:       []string{"${ARTIFACT_OUTPUT}", "callback argument"},
+		Callback: config.CallbackCommands{
+			{Executable: callback, Args: []string{"${ARTIFACT_OUTPUT}", "first"}},
+			{Executable: callback, Args: []string{"${ARTIFACT_OUTPUT}", "second"}},
 		},
 	}}}
 
@@ -85,8 +86,48 @@ func TestRunnerExecutesCallbackAfterURLDownload(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(data) != "callback argument" {
+	if string(data) != "first\nsecond\n" {
 		t.Fatalf("callback content = %q", data)
+	}
+}
+
+func TestRunCallbacksPreservesOrder(t *testing.T) {
+	var output bytes.Buffer
+	job := config.Job{Callback: config.CallbackCommands{
+		{Executable: "/bin/sh", Args: []string{"-c", "printf first"}},
+		{Executable: "/bin/sh", Args: []string{"-c", "printf second"}},
+	}}
+
+	err := (Runner{Stdout: &output, Stderr: &output}).runCallbacks(
+		context.Background(),
+		config.Config{BaseDir: t.TempDir()},
+		job,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if output.String() != "firstsecond" {
+		t.Fatalf("callback output = %q", output.String())
+	}
+}
+
+func TestRunCallbacksStopsAfterFailure(t *testing.T) {
+	var output bytes.Buffer
+	job := config.Job{Callback: config.CallbackCommands{
+		{Executable: "/bin/sh", Args: []string{"-c", "printf failed; exit 7"}},
+		{Executable: "/bin/sh", Args: []string{"-c", "printf should-not-run"}},
+	}}
+
+	err := (Runner{Stdout: &output, Stderr: &output}).runCallbacks(
+		context.Background(),
+		config.Config{BaseDir: t.TempDir()},
+		job,
+	)
+	if err == nil {
+		t.Fatal("runCallbacks() succeeded after a callback failure")
+	}
+	if output.String() != "failed" {
+		t.Fatalf("callback output = %q", output.String())
 	}
 }
 
@@ -103,7 +144,7 @@ func TestRunnerPackageJob(t *testing.T) {
 	if err := os.MkdirAll(binDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	gradle := []byte("#!/bin/sh\nset -eu\ntest \"$1\" = build\ntest \"$2\" = --no-daemon\ntest \"$POLICY_TARGET_TEST\" = from-policy\nprintf artifact > \"$ARTIFACT_OUTPUT/result.txt\"\nprintf cache > \"$ARTIFACT_CACHE/cache-used.txt\"\n")
+	gradle := []byte("#!/bin/sh\nset -eu\ntest \"$1\" = build\ntest \"$2\" = --no-daemon\ntest \"$POLICY_TARGET_TEST\" = from-policy\ntest \"$PACKAGE_CACHE_TEST\" = \"$ARTIFACT_CACHE\"\ntest \"$PACKAGE_OUTPUT_TEST\" = \"$ARTIFACT_OUTPUT\"\ntest -f \"$PACKAGE_REPOSITORY_TEST/project/build.gradle\"\ntest -f \"$PACKAGE_WORKSPACE_TEST/repository/project/build.gradle\"\nprintf artifact > \"$ARTIFACT_OUTPUT/result.txt\"\nprintf cache > \"$ARTIFACT_CACHE/cache-used.txt\"\n")
 	if err := os.WriteFile(filepath.Join(binDir, "gradle"), gradle, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -135,6 +176,12 @@ func TestRunnerPackageJob(t *testing.T) {
 			CloneArgs: []string{"--no-tags"},
 		}, WorkingDirectory: "project",
 		PackageManager: "gradle", Command: config.PackageCommand{Action: "build"},
+		Environment: map[string]string{
+			"PACKAGE_CACHE_TEST":      "${ARTIFACT_CACHE}",
+			"PACKAGE_OUTPUT_TEST":     "${ARTIFACT_OUTPUT}",
+			"PACKAGE_REPOSITORY_TEST": "${REPOSITORY_DIR}",
+			"PACKAGE_WORKSPACE_TEST":  "${WORKSPACE}",
+		},
 		Timeout: config.Duration(time.Minute),
 	}}}
 	policy := environmentconfig.Config{
@@ -218,7 +265,7 @@ func TestRunnerRejectsCallbackByDefault(t *testing.T) {
 	cfg := config.Config{Version: 1, BaseDir: dir, Jobs: []config.Job{{
 		Name: "files", Type: config.JobTypeURLs, Output: "out", URLList: "urls.txt",
 		Concurrency: 1, Timeout: config.Duration(time.Minute),
-		Callback: config.ExternalCommand{Executable: "unused"},
+		Callback: config.CallbackCommands{{Executable: "unused"}},
 	}}}
 	results, err := (Runner{}).Run(context.Background(), cfg, "")
 	if err == nil {

@@ -148,6 +148,17 @@ func validateWritableName(prefix, name string) error {
 	return nil
 }
 
+// ValidateJobEnvironment 檢查 package job 自訂環境變數的名稱與保留變數衝突。
+// 輸入為 job environment 名稱到固定值的映射；合法時輸出 nil，名稱無效或嘗試覆寫工具變數時輸出錯誤。
+func ValidateJobEnvironment(environment map[string]string) error {
+	for name := range environment {
+		if err := validateWritableName("environment", name); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // Build 依共同政策及指定 manager 政策建立乾淨的子程序環境。
 // 輸入為 package manager 名稱；輸出為環境名稱到值的映射，必要來源缺少時輸出錯誤。
 func (c Config) Build(manager string) (map[string]string, error) {

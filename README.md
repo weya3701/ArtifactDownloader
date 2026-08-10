@@ -47,7 +47,7 @@ Package job 預設只取得內建允許的最小環境。由管理者提供受�
   --environment-config examples/environment.yaml
 ```
 
-除錯時也可完整繼承 Artifact Downloader 程序的原始環境：
+除錯時也可完整繼承 Artifact Downloader 程序的原始環境，並在執行前將任務欄位中的 `${ENV_VAR}` 展開：
 
 ```bash
 ./artifact-downloader run \
@@ -55,7 +55,7 @@ Package job 預設只取得內建允許的最小環境。由管理者提供受�
   --inherit-environment
 ```
 
-`--environment-config` 與 `--inherit-environment` 互斥。完整繼承可能把 token 或雲端憑證暴露給 repository 的建構邏輯，只能用於可信 repository。
+`--environment-config` 與 `--inherit-environment` 互斥。完整繼承可能把 token 或雲端憑證暴露給 repository 的建構邏輯，只能用於可信 repository。任務欄位引用的變數不存在時，job 會在 clone 或下載開始前失敗並指出欄位名稱。
 
 ### URL 模式
 
@@ -78,17 +78,20 @@ jobs:
 
 ### 下載完成 Callback
 
-每個 job 都可設定 `callback`。Callback 可執行任意外部程式，因此預設停用；只有設定檔受信任時才可用 `run --allow-callback` 開啟。主要下載流程成功後才會執行 callback；callback 命令失敗時，該 job 也會回報失敗。命令與參數需分開設定：
+每個 job 都可設定多個 `callback`。Callback 可執行任意外部程式，因此預設停用；只有設定檔受信任時才可用 `run --allow-callback` 開啟。主要下載流程成功後，callback 會依設定順序逐一執行；任一命令失敗時會停止後續 callback，該 job 也會回報失敗。命令與參數需分開設定：
 
 ```yaml
 callback:
-  executable: ./scripts/download-complete.sh
-  args:
-    - ${ARTIFACT_OUTPUT}
-    - --notify
+  - executable: ./scripts/verify-checksum.sh
+    args:
+      - ${ARTIFACT_OUTPUT}
+  - executable: ./scripts/download-complete.sh
+    args:
+      - ${ARTIFACT_OUTPUT}
+      - --notify
 ```
 
-Callback 的工作目錄是 YAML 設定檔所在目錄。命令不會交給 shell 執行，因此 `args` 中的每一項都會原樣作為獨立參數傳入。可在 `executable` 與 `args` 使用 `${ARTIFACT_OUTPUT}` 和 `${ARTIFACT_CACHE}`；未設定的路徑會展開為空字串。
+Callback 的工作目錄是 YAML 設定檔所在目錄。命令不會交給 shell 執行，因此 `args` 中的每一項都會原樣作為獨立參數傳入。可在 `executable` 與 `args` 使用 `${ARTIFACT_OUTPUT}` 和 `${ARTIFACT_CACHE}`；未設定的路徑會展開為空字串。原本的單一 callback 物件格式仍可使用。
 
 ### Package 模式
 
@@ -106,6 +109,9 @@ jobs:
     packageManager: gradle
     command:
       action: build
+    environment:
+      CI: "true"
+      BUILD_CACHE: ${ARTIFACT_CACHE}
     cache: ./artifacts/gradle-cache
     timeout: 30m
 ```
@@ -124,7 +130,7 @@ jobs:
 
 `cache` 是 package job 的必填欄位。除 pip `download` action 外，`output` 是選填路徑。npm job 設定 `output` 時，工具會在安裝成功後複製 `node_modules`；未設定時仍只執行暫存安裝。其他 package manager 不會自動複製建構產物，repository 內的建構邏輯必須明確將產物寫入 `ARTIFACT_OUTPUT` 指定的目錄。
 
-Package job 不接受自訂 executable、args 或 environment。無法匹配的 manager/action 會在設定驗證階段被拒絕。工具只使用系統安裝的 package manager，不執行 repository 內的 `gradlew` 或 `mvnw` wrapper。
+Package job 不接受自訂 executable 或 args；無法匹配的 manager/action 會在設定驗證階段被拒絕。可透過 `environment` map 為個別 package job 設定固定環境變數，值中可使用 `${ARTIFACT_CACHE}`、`${ARTIFACT_OUTPUT}`、`${WORKSPACE}` 與 `${REPOSITORY_DIR}`。搭配 `--inherit-environment` 時，也可在 `repository.url`、`repository.ref`、`workingDirectory`、`packageManager`、`command.action`、`cache`、`output`、`urlList`、job `environment` 與 callback 設定中引用主機的 `${ENV_VAR}`。工具只使用系統安裝的 package manager，不執行 repository 內的 `gradlew` 或 `mvnw` wrapper。
 
 目前支援的動作與固定命令如下：
 
@@ -163,6 +169,33 @@ Package 命令使用最小環境，不會繼承程序中的任意 token 或 secr
 - `${ARTIFACT_CACHE}`：`cache` 的絕對路徑。
 - `${ARTIFACT_OUTPUT}`：`output` 的絕對路徑；未設定時為空字串。
 
+`environment` 適合 `CI: "true"`、`NODE_OPTIONS` 等非敏感固定值。Secret 不應直接寫進任務 YAML，請使用下節的 `environmentFrom`。`ARTIFACT_CACHE`、`ARTIFACT_OUTPUT`、`HOME` 與套件管理器 cache 變數由工具管理，不能在 `environment` 覆寫。
+
+Shell 提供任務參數的範例：
+
+```bash
+export PROJECT=my-project
+export REPOSITORY=my-repository
+export BRANCH=main
+export WORKDIR=.
+export PKGMANAGER=npm
+export ACTION=install-unlocked
+export OUTPUT=./artifacts/npm
+
+./artifact-downloader run --config packages.downloader.yaml --inherit-environment
+```
+
+```yaml
+repository:
+  url: https://dev.azure.com/example/${PROJECT}/_git/${REPOSITORY}
+  ref: ${BRANCH}
+workingDirectory: ${WORKDIR}
+packageManager: ${PKGMANAGER}
+command:
+  action: ${ACTION}
+output: ${OUTPUT}
+```
+
 例如 pip 只下載套件而不安裝：
 
 ```yaml
@@ -175,7 +208,7 @@ command:
 
 ### 環境政策
 
-環境政策與任務設定分離。任務 YAML 不能指定環境變數、選擇 profile 或要求完整繼承；只有啟動 Artifact Downloader 的管理者能透過 CLI 選擇政策。
+環境政策負責所有 job 的共同環境、特定 package manager 設定及 secret 映射；任務 YAML 的 `environment` 可提供個別 job 的固定值，或在 `--inherit-environment` 模式引用主機變數，但不能選擇 profile。只有啟動 Artifact Downloader 的管理者能透過 CLI 選擇政策。
 
 範本位於 `examples/environment.yaml`，主要欄位：
 

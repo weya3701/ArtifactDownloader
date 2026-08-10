@@ -51,11 +51,23 @@ func (r Runner) Run(ctx context.Context, cfg config.Config, selectedJob string) 
 	}
 	if !r.AllowCallback {
 		for _, job := range jobs {
-			if job.Callback.Executable != "" {
+			if len(job.Callback) > 0 {
 				return nil, fmt.Errorf("job %q: callback is disabled; use --allow-callback only for trusted configuration", job.Name)
 			}
 		}
 	}
+	expandedJobs := make([]config.Job, len(jobs))
+	for i, job := range jobs {
+		expanded, err := config.ExpandJobEnvironment(job, r.InheritEnvironment)
+		if err != nil {
+			return nil, fmt.Errorf("job %q: %w", job.Name, err)
+		}
+		expandedJobs[i] = expanded
+	}
+	if err := (config.Config{Version: cfg.Version, Jobs: expandedJobs}).Validate(); err != nil {
+		return nil, fmt.Errorf("expanded configuration: %w", err)
+	}
+	jobs = expandedJobs
 
 	results := make([]report.Result, 0, len(jobs))
 	for _, job := range jobs {
@@ -83,8 +95,8 @@ func (r Runner) runJob(parent context.Context, cfg config.Config, job config.Job
 	default:
 		result.Err = fmt.Errorf("unsupported job type %q", job.Type)
 	}
-	if result.Err == nil && job.Callback.Executable != "" {
-		result.Err = r.runCallback(ctx, cfg, job)
+	if result.Err == nil && len(job.Callback) > 0 {
+		result.Err = r.runCallbacks(ctx, cfg, job)
 	}
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		result.Err = fmt.Errorf("job timed out after %s: %w", job.Timeout.Value(), result.Err)
@@ -93,27 +105,29 @@ func (r Runner) runJob(parent context.Context, cfg config.Config, job config.Job
 	return result
 }
 
-// runCallback 在設定檔目錄執行已獲 CLI 授權的外部 callback。
-// 輸入為 job context、路徑基準 cfg 與 callback 設定；成功輸出 nil，失敗輸出 callback 錯誤。
-func (r Runner) runCallback(ctx context.Context, cfg config.Config, job config.Job) error {
+// runCallbacks 在設定檔目錄依設定順序執行已獲 CLI 授權的外部 callbacks。
+// 輸入為 job context、路徑基準 cfg 與 callback 設定；全部成功輸出 nil，失敗時停止並輸出該項錯誤。
+func (r Runner) runCallbacks(ctx context.Context, cfg config.Config, job config.Job) error {
 	variables := map[string]string{
 		"ARTIFACT_CACHE":  resolveOptional(cfg, job.Cache),
 		"ARTIFACT_OUTPUT": resolveOptional(cfg, job.Output),
 	}
-	executable := expandVariables(job.Callback.Executable, variables)
-	args := make([]string, len(job.Callback.Args))
-	for i, arg := range job.Callback.Args {
-		args[i] = expandVariables(arg, variables)
-	}
-
 	runner := executor.Command{}
-	if err := runner.Run(ctx, executable, args, executor.Options{
-		Directory:          cfg.BaseDir,
-		InheritEnvironment: true,
-		Stdout:             r.output(),
-		Stderr:             r.errorOutput(),
-	}); err != nil {
-		return fmt.Errorf("callback: %w", err)
+	for i, callback := range job.Callback {
+		executable := expandVariables(callback.Executable, variables)
+		args := make([]string, len(callback.Args))
+		for j, arg := range callback.Args {
+			args[j] = expandVariables(arg, variables)
+		}
+
+		if err := runner.Run(ctx, executable, args, executor.Options{
+			Directory:          cfg.BaseDir,
+			InheritEnvironment: true,
+			Stdout:             r.output(),
+			Stderr:             r.errorOutput(),
+		}); err != nil {
+			return fmt.Errorf("callback[%d]: %w", i, err)
+		}
 	}
 	return nil
 }
@@ -273,9 +287,15 @@ func (r Runner) runPackage(ctx context.Context, cfg config.Config, job config.Jo
 		return fmt.Errorf("resolve package command: %w", err)
 	}
 
-	environment := spec.Environment
+	variables := map[string]string{
+		"ARTIFACT_CACHE":  cache,
+		"ARTIFACT_OUTPUT": output,
+		"REPOSITORY_DIR":  repositoryDir,
+		"WORKSPACE":       workspace,
+	}
+	var environment map[string]string
 	if r.InheritEnvironment {
-		delete(environment, "HOME")
+		environment = make(map[string]string, len(job.Environment)+len(spec.Environment))
 	} else {
 		policy := environmentconfig.Default()
 		if r.EnvironmentConfig != nil {
@@ -285,9 +305,16 @@ func (r Runner) runPackage(ctx context.Context, cfg config.Config, job config.Jo
 		if err != nil {
 			return fmt.Errorf("build package environment: %w", err)
 		}
-		for name, value := range spec.Environment {
-			environment[name] = value
+	}
+	for name, value := range job.Environment {
+		environment[name] = expandVariables(value, variables)
+	}
+	for name, value := range spec.Environment {
+		// 完整繼承模式沿用啟動程序的 HOME；其他工具管理變數仍固定覆蓋 job 設定。
+		if r.InheritEnvironment && name == "HOME" {
+			continue
 		}
+		environment[name] = value
 	}
 
 	runner := executor.Command{}

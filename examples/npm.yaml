@@ -13,6 +13,10 @@ jobs:
     packageManager: npm
     command:
       action: install
+    # 個別 package job 可加入非敏感固定環境變數。
+    environment:
+      CI: "true"
+      PACKAGE_CACHE_PATH: ${ARTIFACT_CACHE}
     # npm 下載的套件封裝檔會保留在此 cache 目錄。
     cache: ../artifacts/npm-cache
     timeout: 30m

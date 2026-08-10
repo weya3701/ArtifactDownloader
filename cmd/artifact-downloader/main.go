@@ -58,7 +58,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		verbose := flags.Bool("verbose", false, "show git and command output")
 		allowCallback := flags.Bool("allow-callback", false, "allow callbacks from trusted configuration")
 		environmentConfigPath := flags.String("environment-config", "", "path to a trusted environment policy")
-		inheritEnvironment := flags.Bool("inherit-environment", false, "inherit the complete process environment for trusted repositories")
+		inheritEnvironment := flags.Bool("inherit-environment", false, "inherit the complete process environment and expand task environment references for trusted repositories")
 		if err := flags.Parse(args[1:]); err != nil {
 			return 2
 		}

@@ -66,6 +66,18 @@ func TestValidateRejectsReservedVariable(t *testing.T) {
 	}
 }
 
+func TestValidateJobEnvironment(t *testing.T) {
+	if err := ValidateJobEnvironment(map[string]string{"CI": "true", "NODE_OPTIONS": "--max-old-space-size=4096"}); err != nil {
+		t.Fatalf("ValidateJobEnvironment() rejected valid names: %v", err)
+	}
+	if err := ValidateJobEnvironment(map[string]string{"INVALID-NAME": "value"}); err == nil {
+		t.Fatal("ValidateJobEnvironment() accepted an invalid name")
+	}
+	if err := ValidateJobEnvironment(map[string]string{"ARTIFACT_CACHE": "/override"}); err == nil {
+		t.Fatal("ValidateJobEnvironment() accepted a reserved name")
+	}
+}
+
 func TestLoadRejectsUnknownField(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "environment.yaml")
 	if err := os.WriteFile(path, []byte("version: 1\nunknown: true\n"), 0o600); err != nil {

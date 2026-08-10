@@ -93,7 +93,7 @@ configuration is valid (2 jobs)
 | `--keep-workspace` | 保留 package job workspace |
 | `--allow-callback` | 授權執行可信設定中的 callback |
 | `--environment-config <file>` | 套用管理者提供的環境政策 |
-| `--inherit-environment` | 完整繼承啟動程序環境，僅供可信 repository |
+| `--inherit-environment` | 完整繼承啟動程序環境，並展開任務欄位中的 `${ENV_VAR}`；僅供可信 repository |
 
 `--environment-config` 與 `--inherit-environment` 不可同時使用。
 
@@ -138,7 +138,7 @@ jobs:
 | `name` | string | 是 | job 唯一名稱，供結果與 `--job` 使用 |
 | `type` | string | 是 | `urls` 或 `package` |
 | `timeout` | duration | 否 | 預設 `10m`，必須大於 0 |
-| `callback` | object | 否 | 成功後執行的外部程式，需 CLI 授權 |
+| `callback` | list | 否 | 成功後依序執行的外部程式清單，需 CLI 授權；亦相容舊版單一物件格式 |
 
 Duration 採 Go 格式，可使用 `30s`、`10m`、`1h30m`；不可寫純數字或零值。
 
@@ -236,6 +236,7 @@ overwrite: true
 | `workingDirectory` | string | 否 | repository 內執行命令的目錄；空值等同根目錄 |
 | `packageManager` | string | 是 | `gradle`、`mvn`、`npm`、`yarn`、`pip` |
 | `command.action` | string | 是 | 必須是該 manager 的允許動作 |
+| `environment` | string map | 否 | 此 job 的固定環境變數；值可使用受控路徑變數 |
 | `cache` | string | 是 | 持久化依賴 cache 目錄 |
 | `output` | string | 視情況 | pip 必填；npm 可選；其他 manager 可選 |
 
@@ -252,7 +253,49 @@ overwrite: true
 | `yarn` / `install` | `yarn install --immutable --ignore-scripts` | `YARN_CACHE_FOLDER` | 不自動複製安裝產物 |
 | `pip` / `download` | `python3 -m pip download -r requirements.txt --dest <output>` | `PIP_CACHE_DIR` | 套件檔直接寫入 `output` |
 
-設定檔不能自訂 package executable、args 或 environment。這是安全邊界，也是可預測性的來源。
+設定檔不能自訂 package executable 或 args。這是安全邊界，也是可預測性的來源。
+
+`environment` 可為單一 package job 加入非敏感固定值：
+
+```yaml
+environment:
+  CI: "true"
+  NODE_OPTIONS: --max-old-space-size=4096
+  PACKAGE_CACHE_PATH: ${ARTIFACT_CACHE}
+```
+
+值中可使用 `${ARTIFACT_CACHE}`、`${ARTIFACT_OUTPUT}`、`${WORKSPACE}` 與 `${REPOSITORY_DIR}`，並在執行 job 時展開為絕對路徑。環境變數名稱必須符合一般識別字格式。`ARTIFACT_CACHE`、`ARTIFACT_OUTPUT`、`HOME`、`GRADLE_USER_HOME`、`PIP_CACHE_DIR`、`npm_config_cache` 與 `YARN_CACHE_FOLDER` 由工具管理，不能在 job 中覆寫。`environment` 只套用於 package 命令，不會套用到 Git clone 或 callback。
+
+使用 `--inherit-environment` 時，`repository.url`、`repository.ref`、`workingDirectory`、`packageManager`、`command.action`、`cache`、`output`、`urlList`、job `environment`、callback executable 與 args 也可引用啟動程序的 `${ENV_VAR}`：
+
+```bash
+export PROJECT=my-project
+export REPOSITORY=my-repository
+export BRANCH=main
+export WORKDIR=.
+export PKGMANAGER=npm
+export ACTION=install-unlocked
+export OUTPUT=./artifacts/npm
+
+./artifact-downloader run \
+  --config ./packages.downloader.yaml \
+  --inherit-environment
+```
+
+```yaml
+repository:
+  url: https://dev.azure.com/example/${PROJECT}/_git/${REPOSITORY}
+  ref: ${BRANCH}
+workingDirectory: ${WORKDIR}
+packageManager: ${PKGMANAGER}
+command:
+  action: ${ACTION}
+output: ${OUTPUT}
+```
+
+缺少任何被引用的主機變數時，工具會在開始 clone／下載前失敗並指出欄位與變數名稱。未加 `--inherit-environment` 時，這些欄位的主機變數引用也會被拒絕；既有 `repository.gitArgs`／`cloneArgs` 的環境展開不受此限制。
+
+Secret 不應直接寫入任務 YAML；請將值留在啟動程序環境，並透過第 8 節環境政策的 `environmentFrom` 映射。
 
 ### 6.3 場景：Gradle 專案
 
@@ -480,7 +523,7 @@ repository:
 
 ## 8. 環境政策設定檔
 
-Package 命令預設使用內建最小環境，只繼承 `PATH`、locale、暫存目錄及常見大小寫 Proxy 變數。任務 YAML 不可自行要求 secret 或完整環境；管理者可另建受信任政策檔：
+Package 命令預設使用內建最小環境，只繼承 `PATH`、locale、暫存目錄及常見大小寫 Proxy 變數。任務 YAML 可提供個別 job 的非敏感固定值；使用者明確加上 `--inherit-environment` 時，也可引用主機變數並完整繼承環境。管理者可另建受信任政策檔：
 
 ```yaml
 version: 1
@@ -576,16 +619,19 @@ HOME
 
 ## 9. Callback
 
-每個 job 可設定成功後 callback：
+每個 job 可設定多個成功後 callback：
 
 ```yaml
 callback:
-  executable: ./scripts/download-complete.sh
-  args:
-    - ${ARTIFACT_OUTPUT}
-    - --cache
-    - ${ARTIFACT_CACHE}
-    - --notify
+  - executable: ./scripts/verify-checksum.sh
+    args:
+      - ${ARTIFACT_OUTPUT}
+  - executable: ./scripts/download-complete.sh
+    args:
+      - ${ARTIFACT_OUTPUT}
+      - --cache
+      - ${ARTIFACT_CACHE}
+      - --notify
 ```
 
 ```bash
@@ -597,12 +643,15 @@ callback:
 規則如下：
 
 - 預設停用；設定中只要選定執行的 job 含 callback，而未帶 `--allow-callback`，流程會在執行任何 job 前拒絕啟動。
-- 只在該 job 主流程成功後執行；callback 非零結束會使 job 失敗。
+- 只在該 job 主流程成功後執行，並依清單中的設定順序逐一等待完成。
+- 任一 callback 非零結束會停止後續 callback，並使 job 失敗。
 - 工作目錄是任務 YAML 所在目錄。
 - 不透過 shell，`args` 每一項都是獨立參數；pipe、redirect、`$()` 不會由 shell 解讀。
 - `${ARTIFACT_OUTPUT}`、`${ARTIFACT_CACHE}` 可用於 executable 與 args；未設定的路徑展開成空字串。
 - Callback 完整繼承 Artifact Downloader 程序環境，因此只能授權可信設定。
 - Callback 與主流程共用同一個 job timeout，應預留足夠時間。
+
+舊版的單一物件格式仍可使用，載入時會視為只含一項的 callback 清單。
 
 適用場景包括 checksum 驗證、產物壓縮、寫入完成旗標或呼叫既有通知程式。若需要複合 shell 語法，應將邏輯寫在經審查的腳本內，再把該腳本設為 `executable`。
 

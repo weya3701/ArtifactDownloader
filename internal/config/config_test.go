@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -82,14 +83,250 @@ jobs:
 	}
 }
 
+func TestLoadPackageEnvironment(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	data := []byte(`version: 1
+jobs:
+  - name: npm
+    type: package
+    cache: ./cache
+    packageManager: npm
+    repository:
+      url: https://example.test/repository.git
+    command:
+      action: install
+    environment:
+      CI: "true"
+      PACKAGE_CACHE: ${ARTIFACT_CACHE}
+`)
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	environment := cfg.Jobs[0].Environment
+	if environment["CI"] != "true" || environment["PACKAGE_CACHE"] != "${ARTIFACT_CACHE}" {
+		t.Fatalf("environment = %#v", environment)
+	}
+}
+
+func TestLoadAcceptsTemplatedPackageCommand(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	data := []byte(`version: 1
+jobs:
+  - name: package
+    type: package
+    cache: ./cache
+    output: ./output
+    packageManager: ${PKGMANAGER}
+    repository:
+      url: https://example.test/repository.git
+    command:
+      action: ${ACTION}
+`)
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Jobs[0].PackageManager != "${PKGMANAGER}" || cfg.Jobs[0].Command.Action != "${ACTION}" {
+		t.Fatalf("templated package command = %#v", cfg.Jobs[0])
+	}
+}
+
+func TestExpandJobEnvironmentFromHost(t *testing.T) {
+	t.Setenv("PROJECT", "project-name")
+	t.Setenv("REPOSITORY", "repository-name")
+	t.Setenv("BRANCH", "main")
+	t.Setenv("WORKDIR", "src")
+	t.Setenv("OUTPUT", "./artifacts")
+	t.Setenv("ADO_COLLECTION", "collection-name")
+	t.Setenv("PKGMANAGER", "npm")
+	t.Setenv("ACTION", "install-unlocked")
+
+	job := Job{
+		Output: "${OUTPUT}", Cache: "./cache", WorkingDirectory: "${WORKDIR}",
+		PackageManager: "${PKGMANAGER}", Command: PackageCommand{Action: "${ACTION}"},
+		Repository: Repository{
+			URL:     "https://dev.azure.com/org/${PROJECT}/_git/${REPOSITORY}",
+			Ref:     "${BRANCH}",
+			GitArgs: []string{"header=${ADO_AUTH_HEADER}"},
+		},
+		Environment: map[string]string{
+			"COLLECTION":    "${ADO_COLLECTION}",
+			"PACKAGE_CACHE": "${ARTIFACT_CACHE}",
+		},
+		Callback: CallbackCommands{{
+			Executable: "./publisher-${PROJECT}",
+			Args:       []string{"${ADO_COLLECTION}", "${ARTIFACT_OUTPUT}"},
+		}},
+	}
+
+	expanded, err := ExpandJobEnvironment(job, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if expanded.Repository.URL != "https://dev.azure.com/org/project-name/_git/repository-name" ||
+		expanded.Repository.Ref != "main" || expanded.WorkingDirectory != "src" || expanded.Output != "./artifacts" ||
+		expanded.PackageManager != "npm" || expanded.Command.Action != "install-unlocked" {
+		t.Fatalf("expanded job fields = %#v", expanded)
+	}
+	if expanded.Environment["COLLECTION"] != "collection-name" || expanded.Environment["PACKAGE_CACHE"] != "${ARTIFACT_CACHE}" {
+		t.Fatalf("expanded environment = %#v", expanded.Environment)
+	}
+	if expanded.Callback[0].Executable != "./publisher-project-name" ||
+		expanded.Callback[0].Args[0] != "collection-name" || expanded.Callback[0].Args[1] != "${ARTIFACT_OUTPUT}" {
+		t.Fatalf("expanded callback = %#v", expanded.Callback)
+	}
+	if expanded.Repository.GitArgs[0] != "header=${ADO_AUTH_HEADER}" {
+		t.Fatalf("gitArgs should remain deferred: %#v", expanded.Repository.GitArgs)
+	}
+}
+
+func TestExpandedPackageCommandStillUsesAllowlist(t *testing.T) {
+	t.Setenv("PKGMANAGER", "custom")
+	t.Setenv("ACTION", "execute-anything")
+	job := Job{
+		Name: "package", Type: JobTypePackage, Cache: "cache", Output: "output",
+		Repository: Repository{URL: "repository"}, Timeout: Duration(time.Minute),
+		PackageManager: "${PKGMANAGER}", Command: PackageCommand{Action: "${ACTION}"},
+	}
+	expanded, err := ExpandJobEnvironment(job, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := (Config{Version: 1, Jobs: []Job{expanded}}).Validate(); err == nil {
+		t.Fatal("Validate() accepted an unsupported expanded package command")
+	}
+}
+
+func TestExpandJobEnvironmentRequiresInheritance(t *testing.T) {
+	job := Job{Repository: Repository{URL: "https://example.test/${PROJECT}"}}
+	if _, err := ExpandJobEnvironment(job, false); err == nil || !strings.Contains(err.Error(), "--inherit-environment") {
+		t.Fatalf("ExpandJobEnvironment() error = %v", err)
+	}
+}
+
+func TestExpandJobEnvironmentRejectsMissingVariable(t *testing.T) {
+	const name = "ARTIFACT_DOWNLOADER_MISSING_JOB_VARIABLE"
+	_ = os.Unsetenv(name)
+	job := Job{WorkingDirectory: "${" + name + "}"}
+	if _, err := ExpandJobEnvironment(job, true); err == nil || !strings.Contains(err.Error(), name) {
+		t.Fatalf("ExpandJobEnvironment() error = %v", err)
+	}
+}
+
+func TestPackageRejectsReservedEnvironmentVariable(t *testing.T) {
+	cfg := Config{Version: 1, Jobs: []Job{{
+		Name: "npm", Type: JobTypePackage, Cache: "cache",
+		Repository: Repository{URL: "repo"}, PackageManager: "npm",
+		Command: PackageCommand{Action: "install"}, Timeout: Duration(time.Minute),
+		Environment: map[string]string{"npm_config_cache": "/override"},
+	}}}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("Validate() accepted a reserved package environment variable")
+	}
+}
+
+func TestURLJobRejectsEnvironment(t *testing.T) {
+	cfg := Config{Version: 1, Jobs: []Job{{
+		Name: "files", Type: JobTypeURLs, Output: "out", URLList: "urls.txt",
+		Concurrency: 1, Timeout: Duration(time.Minute),
+		Environment: map[string]string{"CI": "true"},
+	}}}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("Validate() accepted environment on a URL job")
+	}
+}
+
 func TestCallbackArgsRequireExecutable(t *testing.T) {
 	cfg := Config{Version: 1, Jobs: []Job{{
 		Name: "files", Type: JobTypeURLs, Output: "out", URLList: "urls.txt",
 		Concurrency: 1, Timeout: Duration(time.Minute),
-		Callback: ExternalCommand{Args: []string{"done"}},
+		Callback: CallbackCommands{{Args: []string{"done"}}},
 	}}}
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("Validate() accepted callback args without executable")
+	}
+}
+
+func TestLoadCallbackListPreservesOrder(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	data := []byte(`version: 1
+jobs:
+  - name: files
+    type: urls
+    output: out
+    urlList: urls.txt
+    callback:
+      - executable: first
+        args: [one]
+      - executable: second
+        args: [two]
+`)
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	callbacks := cfg.Jobs[0].Callback
+	if len(callbacks) != 2 || callbacks[0].Executable != "first" || callbacks[1].Executable != "second" {
+		t.Fatalf("callback order = %#v", callbacks)
+	}
+}
+
+func TestLoadAcceptsLegacySingleCallbackObject(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	data := []byte(`version: 1
+jobs:
+  - name: files
+    type: urls
+    output: out
+    urlList: urls.txt
+    callback:
+      executable: legacy
+      args: [done]
+`)
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	callbacks := cfg.Jobs[0].Callback
+	if len(callbacks) != 1 || callbacks[0].Executable != "legacy" {
+		t.Fatalf("legacy callback = %#v", callbacks)
+	}
+}
+
+func TestLoadRejectsUnknownCallbackField(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	data := []byte(`version: 1
+jobs:
+  - name: files
+    type: urls
+    output: out
+    urlList: urls.txt
+    callback:
+      - executable: first
+        unknown: true
+`)
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path); err == nil {
+		t.Fatal("Load() accepted an unknown callback field")
 	}
 }
 

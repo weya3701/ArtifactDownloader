@@ -105,6 +105,8 @@ jobs:
       url: https://github.com/example/project.git
       ref: main
       depth: 1
+    # 選填；在 ADO 可用 .，直接使用設定檔所在的 pipeline workspace。
+    workspace: .
     workingDirectory: backend
     packageManager: gradle
     command:
@@ -118,19 +120,21 @@ jobs:
 
 工具會依序：
 
-1. 建立隔離的暫存 workspace。
+1. 未設定 `workspace` 時建立隔離的暫存 workspace；有設定時使用指定目錄。
 2. 使用系統的 `git` clone repository，並 checkout `ref`。
 3. 切換至 `workingDirectory`。
 4. 將套件管理器的 cache 指向設定的 `cache` 目錄。
 5. 依 `packageManager` 與 `command.action` 選擇內建的固定命令，由建構或安裝流程下載依賴。
-6. 將 cache 保留在 workspace 外；npm job 若設定 `output`，會將安裝完成的
+6. 將 cache 保留在設定的 `cache` 路徑；npm job 若設定 `output`，會將安裝完成的
    `node_modules` 保留到 `<output>/node_modules`。其他 manager 若命令自行寫入
    `output`，該產物也會保留。
-7. 成功或失敗後清除 workspace，除非指定 `--keep-workspace`。
+7. 自動建立的暫存 workspace 會在成功或失敗後清除，除非指定 `--keep-workspace`；明確設定的 `workspace` 一律保留並交由呼叫端管理。
 
-`cache` 是 package job 的必填欄位。除 pip `download` action 外，`output` 是選填路徑。npm job 設定 `output` 時，工具會在安裝成功後複製 `node_modules`；未設定時仍只執行暫存安裝。其他 package manager 不會自動複製建構產物，repository 內的建構邏輯必須明確將產物寫入 `ARTIFACT_OUTPUT` 指定的目錄。
+`workspace`、`cache` 與 `output` 的相對路徑都以 YAML 所在目錄為基準。ADO pipeline 若已提供一次性 workspace，可設定 `workspace: .`；repository 會 clone 到 `./repository`，建構內容不會由工具清除。該目錄已存在 repository 時，Git 會拒絕再次 clone，因此重跑時應使用乾淨的 pipeline workspace 或不同路徑。
 
-Package job 不接受自訂 executable 或 args；無法匹配的 manager/action 會在設定驗證階段被拒絕。可透過 `environment` map 為個別 package job 設定固定環境變數，值中可使用 `${ARTIFACT_CACHE}`、`${ARTIFACT_OUTPUT}`、`${WORKSPACE}` 與 `${REPOSITORY_DIR}`。搭配 `--inherit-environment` 時，也可在 `repository.url`、`repository.ref`、`workingDirectory`、`packageManager`、`command.action`、`cache`、`output`、`urlList`、job `environment` 與 callback 設定中引用主機的 `${ENV_VAR}`。工具只使用系統安裝的 package manager，不執行 repository 內的 `gradlew` 或 `mvnw` wrapper。
+`cache` 是 package job 的必填欄位。除 pip `download` action 外，`output` 是選填路徑。npm job 設定 `output` 時，工具會在安裝成功後複製 `node_modules`；未設定時仍只執行安裝。其他 package manager 不會自動複製建構產物，repository 內的建構邏輯必須明確將產物寫入 `ARTIFACT_OUTPUT` 指定的目錄。
+
+Package job 不接受自訂 executable 或 args；無法匹配的 manager/action 會在設定驗證階段被拒絕。可透過 `environment` map 為個別 package job 設定固定環境變數，值中可使用 `${ARTIFACT_CACHE}`、`${ARTIFACT_OUTPUT}`、`${WORKSPACE}` 與 `${REPOSITORY_DIR}`。搭配 `--inherit-environment` 時，也可在 `repository.url`、`repository.ref`、`workspace`、`workingDirectory`、`packageManager`、`command.action`、`cache`、`output`、`urlList`、job `environment` 與 callback 設定中引用主機的 `${ENV_VAR}`。工具只使用系統安裝的 package manager，不執行 repository 內的 `gradlew` 或 `mvnw` wrapper。
 
 目前支援的動作與固定命令如下：
 

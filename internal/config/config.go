@@ -60,6 +60,7 @@ type Job struct {
 	Timeout          Duration          `yaml:"timeout"`
 	Overwrite        bool              `yaml:"overwrite"`
 	Repository       Repository        `yaml:"repository"`
+	Workspace        string            `yaml:"workspace"`
 	WorkingDirectory string            `yaml:"workingDirectory"`
 	PackageManager   string            `yaml:"packageManager"`
 	Command          PackageCommand    `yaml:"command"`
@@ -174,6 +175,7 @@ func ExpandJobEnvironment(job Job, allowHostEnvironment bool) (Job, error) {
 		{"urlList", &job.URLList},
 		{"repository.url", &job.Repository.URL},
 		{"repository.ref", &job.Repository.Ref},
+		{"workspace", &job.Workspace},
 		{"workingDirectory", &job.WorkingDirectory},
 		{"packageManager", &job.PackageManager},
 		{"command.action", &job.Command.Action},
@@ -329,6 +331,9 @@ func (c Config) Validate() error {
 		case JobTypeURLs:
 			if len(job.Environment) > 0 {
 				return fmt.Errorf("job %q: environment is only supported for package jobs", job.Name)
+			}
+			if strings.TrimSpace(job.Workspace) != "" {
+				return fmt.Errorf("job %q: workspace is only supported for package jobs", job.Name)
 			}
 			if strings.TrimSpace(job.Output) == "" {
 				return fmt.Errorf("job %q: output is required", job.Name)

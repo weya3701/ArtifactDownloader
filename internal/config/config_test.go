@@ -59,6 +59,7 @@ jobs:
   - name: ado
     type: package
     cache: ./cache
+    workspace: .
     packageManager: gradle
     repository:
       url: https://dev.azure.com/org/project/_git/repo
@@ -80,6 +81,9 @@ jobs:
 	repository := cfg.Jobs[0].Repository
 	if len(repository.GitArgs) != 2 || len(repository.CloneArgs) != 1 {
 		t.Fatalf("unexpected repository arguments: %#v", repository)
+	}
+	if cfg.Jobs[0].Workspace != "." {
+		t.Fatalf("workspace = %q, want .", cfg.Jobs[0].Workspace)
 	}
 }
 
@@ -145,13 +149,14 @@ func TestExpandJobEnvironmentFromHost(t *testing.T) {
 	t.Setenv("REPOSITORY", "repository-name")
 	t.Setenv("BRANCH", "main")
 	t.Setenv("WORKDIR", "src")
+	t.Setenv("PIPELINE_WORKSPACE", "./pipeline-workspace")
 	t.Setenv("OUTPUT", "./artifacts")
 	t.Setenv("ADO_COLLECTION", "collection-name")
 	t.Setenv("PKGMANAGER", "npm")
 	t.Setenv("ACTION", "install-unlocked")
 
 	job := Job{
-		Output: "${OUTPUT}", Cache: "./cache", WorkingDirectory: "${WORKDIR}",
+		Output: "${OUTPUT}", Cache: "./cache", Workspace: "${PIPELINE_WORKSPACE}", WorkingDirectory: "${WORKDIR}",
 		PackageManager: "${PKGMANAGER}", Command: PackageCommand{Action: "${ACTION}"},
 		Repository: Repository{
 			URL:     "https://dev.azure.com/org/${PROJECT}/_git/${REPOSITORY}",
@@ -173,7 +178,8 @@ func TestExpandJobEnvironmentFromHost(t *testing.T) {
 		t.Fatal(err)
 	}
 	if expanded.Repository.URL != "https://dev.azure.com/org/project-name/_git/repository-name" ||
-		expanded.Repository.Ref != "main" || expanded.WorkingDirectory != "src" || expanded.Output != "./artifacts" ||
+		expanded.Repository.Ref != "main" || expanded.Workspace != "./pipeline-workspace" ||
+		expanded.WorkingDirectory != "src" || expanded.Output != "./artifacts" ||
 		expanded.PackageManager != "npm" || expanded.Command.Action != "install-unlocked" {
 		t.Fatalf("expanded job fields = %#v", expanded)
 	}

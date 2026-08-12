@@ -170,7 +170,7 @@ func TestRunnerPackageJob(t *testing.T) {
 	git("commit", "-q", "-m", "fixture")
 
 	cfg := config.Config{Version: 1, BaseDir: dir, Jobs: []config.Job{{
-		Name: "package", Type: config.JobTypePackage, Output: "artifacts", Cache: "cache",
+		Name: "package", Type: config.JobTypePackage, Output: "artifacts", Cache: "cache", Workspace: "workspace",
 		Repository: config.Repository{
 			URL: repositoryDir, GitArgs: []string{"-c", "advice.detachedHead=false"},
 			CloneArgs: []string{"--no-tags"},
@@ -212,6 +212,9 @@ func TestRunnerPackageJob(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, "cache", "cache-used.txt")); err != nil {
 		t.Fatalf("package cache was not retained: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "workspace", "repository", "project", "build.gradle")); err != nil {
+		t.Fatalf("configured workspace was not retained: %v", err)
 	}
 }
 

@@ -7,7 +7,7 @@
 Artifact Downloader 是 YAML 驅動的命令列工具，支援兩種 job：
 
 - `urls`：從文字清單讀取 HTTP/HTTPS URL，並行下載檔案。
-- `package`：建立暫存 workspace、clone Git repository、切換目錄，再以內建固定命令下載或建置依賴。
+- `package`：建立暫存或使用指定 workspace、clone Git repository、切換目錄，再以內建固定命令下載或建置依賴。
 
 設定檔中的 job 依列出順序逐一執行。單一 job 失敗後，若程序未被取消，後續 job 仍會繼續；最後只要任一 job 失敗，程序即以結束碼 `1` 離開。每個 URL job 內部則會依 `concurrency` 並行下載，遇到第一個錯誤後停止派送新工作。
 
@@ -79,7 +79,7 @@ configuration is valid (2 jobs)
   --keep-workspace
 ```
 
-`--keep-workspace` 只影響 package job，會印出並保留暫存 workspace；其中可能包含 clone 下來的原始碼或建置資料，除錯完應自行安全移除。正常模式無論成功或失敗都會清除 workspace。
+`--keep-workspace` 只影響未設定 `workspace` 的 package job，會印出並保留工具建立的暫存 workspace；其中可能包含 clone 下來的原始碼或建置資料，除錯完應自行安全移除。明確設定的 `workspace` 一律保留，因此不需要搭配此選項。
 
 ### 3.4 CLI 選項表
 
@@ -217,6 +217,7 @@ overwrite: true
     url: https://github.com/example/project.git
     ref: main
     depth: 1
+  workspace: .
   workingDirectory: .
   packageManager: npm
   command:
@@ -233,6 +234,7 @@ overwrite: true
 | `repository.depth` | integer | 否 | `0` 表示完整 clone；正數傳給 `--depth`；不可為負數 |
 | `repository.gitArgs` | string list | 否 | 插在 Git 子命令前，clone 與 checkout 都套用 |
 | `repository.cloneArgs` | string list | 否 | 只插在 `git clone` 後 |
+| `workspace` | string | 否 | clone 與建構使用的 workspace；未設定時使用自動清理的系統暫存目錄 |
 | `workingDirectory` | string | 否 | repository 內執行命令的目錄；空值等同根目錄 |
 | `packageManager` | string | 是 | `gradle`、`mvn`、`npm`、`yarn`、`pip` |
 | `command.action` | string | 是 | 必須是該 manager 的允許動作 |
@@ -240,7 +242,7 @@ overwrite: true
 | `cache` | string | 是 | 持久化依賴 cache 目錄 |
 | `output` | string | 視情況 | pip 必填；npm 可選；其他 manager 可選 |
 
-`workingDirectory` 不可使用 `..` 或 symlink 逃出 clone 的 repository。
+`workspace`、`cache` 與 `output` 的相對路徑都以 YAML 所在目錄為基準。指定 `workspace` 時，repository 會 clone 到 `<workspace>/repository`，而且工具不會清除該 workspace；未指定時才會建立並自動清理系統暫存 workspace。`workingDirectory` 不可使用 `..` 或 symlink 逃出 clone 的 repository。
 
 ### 6.2 固定命令與產物
 
@@ -266,7 +268,7 @@ environment:
 
 值中可使用 `${ARTIFACT_CACHE}`、`${ARTIFACT_OUTPUT}`、`${WORKSPACE}` 與 `${REPOSITORY_DIR}`，並在執行 job 時展開為絕對路徑。環境變數名稱必須符合一般識別字格式。`ARTIFACT_CACHE`、`ARTIFACT_OUTPUT`、`HOME`、`GRADLE_USER_HOME`、`PIP_CACHE_DIR`、`npm_config_cache` 與 `YARN_CACHE_FOLDER` 由工具管理，不能在 job 中覆寫。`environment` 只套用於 package 命令，不會套用到 Git clone 或 callback。
 
-使用 `--inherit-environment` 時，`repository.url`、`repository.ref`、`workingDirectory`、`packageManager`、`command.action`、`cache`、`output`、`urlList`、job `environment`、callback executable 與 args 也可引用啟動程序的 `${ENV_VAR}`：
+使用 `--inherit-environment` 時，`repository.url`、`repository.ref`、`workspace`、`workingDirectory`、`packageManager`、`command.action`、`cache`、`output`、`urlList`、job `environment`、callback executable 與 args 也可引用啟動程序的 `${ENV_VAR}`：
 
 ```bash
 export PROJECT=my-project
@@ -675,6 +677,14 @@ go build -o artifact-downloader ./cmd/artifact-downloader
 - 保留執行摘要及 verbose log，但確認外部工具不會把憑證印出。
 - 不可信 repository 應在 container 或 OS sandbox 執行。Gradle、Maven 等建置本身仍可執行 repository 中的程式碼。
 - 同一個 output/cache 若可能由多個程序同時寫入，應由排程層避免並行；工具未提供跨程序鎖定。
+
+ADO pipeline 已提供一次性工作區時，可在 package job 使用：
+
+```yaml
+workspace: .
+```
+
+相對路徑以任務 YAML 所在目錄為基準；repository 會位於 `./repository`，工具不會在 job 結束時刪除。若同一份設定包含多個 package job，請為各 job 指定不同 workspace，或確保前一個 `<workspace>/repository` 已由 pipeline 清理。
 
 ## 11. 常見錯誤與處理
 

@@ -228,17 +228,26 @@ func (r Runner) runURLs(ctx context.Context, cfg config.Config, job config.Job) 
 	return completed, nil
 }
 
-// runPackage 建立暫存 workspace、clone repository，解析固定 package 命令後在受控環境執行。
+// runPackage 建立暫存或使用指定 workspace、clone repository，解析固定 package 命令後在受控環境執行。
 // 輸入為 job context、路徑基準 cfg 與 package job；成功輸出 nil，任一準備或執行階段失敗則輸出錯誤。
 func (r Runner) runPackage(ctx context.Context, cfg config.Config, job config.Job) error {
-	workspace, err := os.MkdirTemp("", "artifact-downloader-*")
-	if err != nil {
-		return fmt.Errorf("create workspace: %w", err)
-	}
-	if r.KeepWorkspace {
-		fmt.Fprintf(r.output(), "workspace for %s: %s\n", job.Name, workspace)
+	workspace := ""
+	if strings.TrimSpace(job.Workspace) != "" {
+		workspace = cfg.Resolve(job.Workspace)
+		if err := os.MkdirAll(workspace, 0o755); err != nil {
+			return fmt.Errorf("create configured workspace: %w", err)
+		}
 	} else {
-		defer os.RemoveAll(workspace)
+		var err error
+		workspace, err = os.MkdirTemp("", "artifact-downloader-*")
+		if err != nil {
+			return fmt.Errorf("create workspace: %w", err)
+		}
+		if r.KeepWorkspace {
+			fmt.Fprintf(r.output(), "workspace for %s: %s\n", job.Name, workspace)
+		} else {
+			defer os.RemoveAll(workspace)
+		}
 	}
 
 	repositoryDir := filepath.Join(workspace, "repository")

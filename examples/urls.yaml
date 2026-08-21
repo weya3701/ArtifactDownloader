@@ -6,5 +6,11 @@ jobs:
     output: ../artifacts/files
     urlList: ./downloads.txt
     concurrency: 4
+    requestDelay:
+      min: 1s
+      max: 3s
+    headers:
+      User-Agent: ArtifactDownloader/1.0
+      Accept: "*/*"
     timeout: 10m
     overwrite: false

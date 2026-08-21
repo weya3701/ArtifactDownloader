@@ -57,6 +57,8 @@ type Job struct {
 	Cache            string            `yaml:"cache"`
 	URLList          string            `yaml:"urlList"`
 	Concurrency      int               `yaml:"concurrency"`
+	RequestDelay     RequestDelay      `yaml:"requestDelay"`
+	Headers          map[string]string `yaml:"headers"`
 	Timeout          Duration          `yaml:"timeout"`
 	Overwrite        bool              `yaml:"overwrite"`
 	Repository       Repository        `yaml:"repository"`
@@ -66,6 +68,17 @@ type Job struct {
 	Command          PackageCommand    `yaml:"command"`
 	Environment      map[string]string `yaml:"environment"`
 	Callback         CallbackCommands  `yaml:"callback"`
+}
+
+// RequestDelay 描述相鄰 HTTP request 起始時間之間的隨機等待範圍；零值表示停用。
+type RequestDelay struct {
+	Min Duration `yaml:"min"`
+	Max Duration `yaml:"max"`
+}
+
+// Enabled 回報是否已設定 request 間歇。
+func (d RequestDelay) Enabled() bool {
+	return d.Min != 0 || d.Max != 0
 }
 
 // Repository 描述 Git 來源、ref、clone 深度及受控的額外 Git 參數。
@@ -93,6 +106,14 @@ type ExternalCommand struct {
 type CallbackCommands []ExternalCommand
 
 var jobEnvironmentReference = regexp.MustCompile(`\$\{[A-Za-z_][A-Za-z0-9_]*\}`)
+var httpHeaderName = regexp.MustCompile("^[!#$%&'*+\\-.^_`|~0-9A-Za-z]+$")
+
+var managedHTTPHeaders = map[string]struct{}{
+	"content-length":    {},
+	"host":              {},
+	"trailer":           {},
+	"transfer-encoding": {},
+}
 
 var packageRuntimeReferences = map[string]struct{}{
 	"ARTIFACT_CACHE":  {},
@@ -203,6 +224,23 @@ func ExpandJobEnvironment(job Job, allowHostEnvironment bool) (Job, error) {
 			environment[name] = expanded
 		}
 		job.Environment = environment
+	}
+
+	if job.Headers != nil {
+		headers := make(map[string]string, len(job.Headers))
+		names := make([]string, 0, len(job.Headers))
+		for name := range job.Headers {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			expanded, err := expandJobValue("headers."+name, job.Headers[name], allowHostEnvironment, nil)
+			if err != nil {
+				return Job{}, err
+			}
+			headers[name] = expanded
+		}
+		job.Headers = headers
 	}
 
 	callbacks := make(CallbackCommands, len(job.Callback))
@@ -344,7 +382,27 @@ func (c Config) Validate() error {
 			if job.Concurrency < 1 {
 				return fmt.Errorf("job %q: concurrency must be positive", job.Name)
 			}
+			if job.RequestDelay.Enabled() {
+				if job.RequestDelay.Min.Value() <= 0 {
+					return fmt.Errorf("job %q: requestDelay.min must be positive", job.Name)
+				}
+				if job.RequestDelay.Max.Value() <= 0 {
+					return fmt.Errorf("job %q: requestDelay.max must be positive", job.Name)
+				}
+				if job.RequestDelay.Min.Value() > job.RequestDelay.Max.Value() {
+					return fmt.Errorf("job %q: requestDelay.min cannot exceed requestDelay.max", job.Name)
+				}
+			}
+			if err := validateURLHeaders(job.Headers); err != nil {
+				return fmt.Errorf("job %q: %w", job.Name, err)
+			}
 		case JobTypePackage:
+			if job.RequestDelay.Enabled() {
+				return fmt.Errorf("job %q: requestDelay is only supported for URL jobs", job.Name)
+			}
+			if len(job.Headers) > 0 {
+				return fmt.Errorf("job %q: headers are only supported for URL jobs", job.Name)
+			}
 			if err := environmentconfig.ValidateJobEnvironment(job.Environment); err != nil {
 				return fmt.Errorf("job %q: %w", job.Name, err)
 			}
@@ -374,6 +432,33 @@ func (c Config) Validate() error {
 			return fmt.Errorf("job %q: type is required", job.Name)
 		default:
 			return fmt.Errorf("job %q: unsupported type %q", job.Name, job.Type)
+		}
+	}
+	return nil
+}
+
+// validateURLHeaders 檢查 header 名稱、值與由 net/http 管理的 framing headers。
+func validateURLHeaders(headers map[string]string) error {
+	names := make([]string, 0, len(headers))
+	for name := range headers {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	seen := make(map[string]string, len(headers))
+	for _, name := range names {
+		if !httpHeaderName.MatchString(name) {
+			return fmt.Errorf("header name %q is invalid", name)
+		}
+		lower := strings.ToLower(name)
+		if previous, exists := seen[lower]; exists {
+			return fmt.Errorf("header names %q and %q differ only by case", previous, name)
+		}
+		seen[lower] = name
+		if _, managed := managedHTTPHeaders[lower]; managed {
+			return fmt.Errorf("header %q is managed by the HTTP client", name)
+		}
+		if strings.ContainsAny(headers[name], "\r\n") {
+			return fmt.Errorf("header %q contains a line break", name)
 		}
 	}
 	return nil

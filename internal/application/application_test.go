@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -21,6 +22,10 @@ func TestRunnerURLJob(t *testing.T) {
 			http.NotFound(w, r)
 			return
 		}
+		if r.Header.Get("User-Agent") != "ArtifactDownloader-Test/1.0" || r.Header.Get("Accept") != "*/*" {
+			http.Error(w, "required headers are missing", http.StatusTooManyRequests)
+			return
+		}
 		_, _ = w.Write([]byte("downloaded"))
 	}))
 	defer server.Close()
@@ -32,7 +37,10 @@ func TestRunnerURLJob(t *testing.T) {
 	}
 	cfg := config.Config{Version: 1, BaseDir: dir, Jobs: []config.Job{{
 		Name: "files", Type: config.JobTypeURLs, Output: "${ARTIFACT_DOWNLOADER_URL_OUTPUT_TEST}", URLList: "urls.txt",
-		Concurrency: 2, Timeout: config.Duration(time.Minute),
+		Concurrency: 2, Headers: map[string]string{
+			"User-Agent": "ArtifactDownloader-Test/1.0",
+			"Accept":     "*/*",
+		}, Timeout: config.Duration(time.Minute),
 	}}}
 
 	results, err := (Runner{InheritEnvironment: true}).Run(context.Background(), cfg, "")
@@ -48,6 +56,69 @@ func TestRunnerURLJob(t *testing.T) {
 	}
 	if string(data) != "downloaded" {
 		t.Fatalf("content = %q", data)
+	}
+}
+
+func TestRunnerURLJobSpacesRequestStartsWhileKeepingConcurrency(t *testing.T) {
+	var mu sync.Mutex
+	requestTimes := make([]time.Time, 0, 3)
+	inFlight := 0
+	maxInFlight := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		mu.Lock()
+		requestTimes = append(requestTimes, time.Now())
+		inFlight++
+		if inFlight > maxInFlight {
+			maxInFlight = inFlight
+		}
+		mu.Unlock()
+
+		time.Sleep(100 * time.Millisecond)
+		_, _ = w.Write([]byte("downloaded"))
+
+		mu.Lock()
+		inFlight--
+		mu.Unlock()
+	}))
+	defer server.Close()
+
+	dir := t.TempDir()
+	list := []byte(server.URL + "/one.bin\n" + server.URL + "/two.bin\n" + server.URL + "/three.bin\n")
+	if err := os.WriteFile(filepath.Join(dir, "urls.txt"), list, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Config{Version: 1, BaseDir: dir, Jobs: []config.Job{{
+		Name: "files", Type: config.JobTypeURLs, Output: "out", URLList: "urls.txt",
+		Concurrency: 3,
+		RequestDelay: config.RequestDelay{
+			Min: config.Duration(25 * time.Millisecond),
+			Max: config.Duration(25 * time.Millisecond),
+		},
+		Timeout: config.Duration(time.Minute),
+	}}}
+
+	results, err := (Runner{}).Run(context.Background(), cfg, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 1 || results[0].Err != nil || results[0].Files != 3 {
+		t.Fatalf("unexpected results: %#v", results)
+	}
+
+	mu.Lock()
+	times := append([]time.Time(nil), requestTimes...)
+	peak := maxInFlight
+	mu.Unlock()
+	if len(times) != 3 {
+		t.Fatalf("request count = %d, want 3", len(times))
+	}
+	for i := 1; i < len(times); i++ {
+		if gap := times[i].Sub(times[i-1]); gap < 20*time.Millisecond {
+			t.Fatalf("request gap[%d] = %s, want at least 20ms", i, gap)
+		}
+	}
+	if peak < 2 {
+		t.Fatalf("maximum in-flight requests = %d, want concurrent requests", peak)
 	}
 }
 

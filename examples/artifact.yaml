@@ -8,5 +8,11 @@ jobs:
     output: ./artifacts/downloads
 
     concurrency: 1
+    requestDelay:
+      min: 1s
+      max: 3s
+    headers:
+      User-Agent: ArtifactDownloader/1.0
+      Accept: "*/*"
     timeout: 10m
     overwrite: false

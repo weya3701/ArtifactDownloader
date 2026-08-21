@@ -68,13 +68,23 @@ jobs:
     output: ./artifacts/files
     urlList: ./downloads.txt
     concurrency: 4
+    requestDelay:
+      min: 1s
+      max: 3s
+    headers:
+      User-Agent: ArtifactDownloader/1.0
+      Accept: "*/*"
     timeout: 10m
     overwrite: false
 ```
 
 `downloads.txt` 每行放置一個 URL。空白行與以 `#` 開頭的註解會被忽略。URL 必須包含安全的檔名；不同 URL 不可產生相同檔名。
 
-設定檔內的 `output` 與 `urlList` 均相對於 YAML 所在目錄解析。
+設定檔內的 `output` 與 `urlList` 均相對於 YAML 所在目錄解析。`requestDelay` 是選填設定；啟用時，
+工具會在全域相鄰 request 的開始時間之間隨機等待 `min` 至 `max`，同時仍以 `concurrency`
+限制最多並行 request 數。`min` 與 `max` 必須同時提供、皆為正值，且 `min` 不可大於 `max`。
+`headers` 可設定每個 GET request 使用的 header；header 值若引用 `${ENV_VAR}`，執行時需加
+`--inherit-environment`，且 secret 不應直接寫入 YAML。
 
 ### 下載完成 Callback
 
@@ -134,7 +144,7 @@ jobs:
 
 `cache` 是 package job 的必填欄位。除 pip `download` action 外，`output` 是選填路徑。npm job 設定 `output` 時，工具會在安裝成功後複製 `node_modules`；未設定時仍只執行安裝。其他 package manager 不會自動複製建構產物，repository 內的建構邏輯必須明確將產物寫入 `ARTIFACT_OUTPUT` 指定的目錄。
 
-Package job 不接受自訂 executable 或 args；無法匹配的 manager/action 會在設定驗證階段被拒絕。可透過 `environment` map 為個別 package job 設定固定環境變數，值中可使用 `${ARTIFACT_CACHE}`、`${ARTIFACT_OUTPUT}`、`${WORKSPACE}` 與 `${REPOSITORY_DIR}`。搭配 `--inherit-environment` 時，也可在 `repository.url`、`repository.ref`、`workspace`、`workingDirectory`、`packageManager`、`command.action`、`cache`、`output`、`urlList`、job `environment` 與 callback 設定中引用主機的 `${ENV_VAR}`。工具只使用系統安裝的 package manager，不執行 repository 內的 `gradlew` 或 `mvnw` wrapper。
+Package job 不接受自訂 executable 或 args；無法匹配的 manager/action 會在設定驗證階段被拒絕。可透過 `environment` map 為個別 package job 設定固定環境變數，值中可使用 `${ARTIFACT_CACHE}`、`${ARTIFACT_OUTPUT}`、`${WORKSPACE}` 與 `${REPOSITORY_DIR}`。搭配 `--inherit-environment` 時，也可在 `repository.url`、`repository.ref`、`workspace`、`workingDirectory`、`packageManager`、`command.action`、`cache`、`output`、`urlList`、URL `headers` 值、job `environment` 與 callback 設定中引用主機的 `${ENV_VAR}`。工具只使用系統安裝的 package manager，不執行 repository 內的 `gradlew` 或 `mvnw` wrapper。
 
 目前支援的動作與固定命令如下：
 

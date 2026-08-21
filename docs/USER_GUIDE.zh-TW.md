@@ -151,7 +151,26 @@ Duration 採 Go 格式，可使用 `30s`、`10m`、`1h30m`；不可寫純數字�
 | `output` | string | 是 | 下載目的目錄 |
 | `urlList` | string | 是 | URL 文字清單路徑 |
 | `concurrency` | integer | 否 | 預設 `4`，必須至少為 1 |
+| `requestDelay` | object | 否 | 相鄰 request 開始時間的隨機間歇；未設定時不等待 |
+| `headers` | string map | 否 | 套用到每個 GET request 的 HTTP headers |
 | `overwrite` | boolean | 否 | 預設 `false`，是否取代既有同名檔案 |
+
+`requestDelay.min` 與 `requestDelay.max` 必須同時提供、皆為正的 duration，且 `min` 不可大於
+`max`。此間歇作用於整個 job 的 request 派送，而不是每個 worker 各自計時，因此可避免
+`concurrency` 個 worker 同時向來源站發出新 request。已發出的 request 仍可並行下載。
+
+`headers` 可用來設定 `User-Agent`、`Accept` 或來源站要求的認證 header：
+
+```yaml
+headers:
+  User-Agent: ArtifactDownloader/1.0
+  Accept: "*/*"
+```
+
+Header 名稱不可含空白或控制字元，也不可用不同大小寫重複宣告。`Host`、`Content-Length`、
+`Transfer-Encoding` 與 `Trailer` 由 HTTP client 管理，不能在設定中覆寫。Header 值不可含換行。
+敏感值不要直接提交至 YAML；可寫成 `Authorization: "Bearer ${PACKAGE_DOWNLOAD_TOKEN}"`，並在
+安全環境設定變數後使用 `run --inherit-environment`。
 
 URL 清單每行一個 URL；空白行、前後空白及第一個非空字元為 `#` 的行會被忽略，完全相同的 URL 會去重並保留第一次出現的順序。
 
@@ -179,6 +198,12 @@ jobs:
     urlList: ./downloads.txt
     output: ./artifacts/releases
     concurrency: 4
+    requestDelay:
+      min: 1s
+      max: 3s
+    headers:
+      User-Agent: ArtifactDownloader/1.0
+      Accept: "*/*"
     timeout: 15m
     overwrite: false
 ```
@@ -203,8 +228,9 @@ overwrite: true
 ### 5.4 場景：大量檔案或不穩定網路
 
 - 提高 `concurrency` 可增加吞吐量，但也會提高來源站與本機的連線負載。
-- `timeout` 是整個 job 的總期限，不是每個 URL 的期限。
-- 本工具目前不提供 retry、續傳、自訂 HTTP header 或 URL 認證欄位；需要時應由受控的 Proxy／下載入口處理，或擴充程式。
+- 使用 `requestDelay` 可降低短時間內的 request 突發量；例如 `min: 1s`、`max: 3s` 會在每次派送後隨機等待 1–3 秒才派送下一個 URL。
+- `timeout` 是整個 job 的總期限，不是每個 URL 的期限，且包含 `requestDelay` 等待時間。
+- 本工具目前不提供 retry 或續傳；若來源站回傳 429，應先調低 `concurrency`、增加 `requestDelay`，並確認是否要求特定 `User-Agent` 或認證 header。
 
 ## 6. Package 工作
 
@@ -268,7 +294,7 @@ environment:
 
 值中可使用 `${ARTIFACT_CACHE}`、`${ARTIFACT_OUTPUT}`、`${WORKSPACE}` 與 `${REPOSITORY_DIR}`，並在執行 job 時展開為絕對路徑。環境變數名稱必須符合一般識別字格式。`ARTIFACT_CACHE`、`ARTIFACT_OUTPUT`、`HOME`、`GRADLE_USER_HOME`、`PIP_CACHE_DIR`、`npm_config_cache` 與 `YARN_CACHE_FOLDER` 由工具管理，不能在 job 中覆寫。`environment` 只套用於 package 命令，不會套用到 Git clone 或 callback。
 
-使用 `--inherit-environment` 時，`repository.url`、`repository.ref`、`workspace`、`workingDirectory`、`packageManager`、`command.action`、`cache`、`output`、`urlList`、job `environment`、callback executable 與 args 也可引用啟動程序的 `${ENV_VAR}`：
+使用 `--inherit-environment` 時，`repository.url`、`repository.ref`、`workspace`、`workingDirectory`、`packageManager`、`command.action`、`cache`、`output`、`urlList`、URL `headers` 值、job `environment`、callback executable 與 args 也可引用啟動程序的 `${ENV_VAR}`：
 
 ```bash
 export PROJECT=my-project
@@ -427,6 +453,9 @@ jobs:
     urlList: ./downloads.txt
     output: ./artifacts/binaries
     concurrency: 4
+    requestDelay:
+      min: 1s
+      max: 3s
     timeout: 10m
     overwrite: false
 
@@ -697,7 +726,8 @@ workspace: .
 | `destination already exists` | `overwrite: false` 且檔案已存在 | 確認後改為 `true` 或換 output |
 | `same filename` | 不同 URL 的 path 最後一段相同 | 分拆 job/output，或調整來源 URL 檔名 |
 | `URL does not contain a safe filename` | URL 結尾沒有有效檔名 | 使用直接指向檔案的 URL |
-| `unexpected HTTP status` | 404、403、伺服器錯誤 | 檢查 URL、權限與 Proxy；URL 模式不支援自訂 header |
+| `unexpected HTTP status` | 404、403、伺服器錯誤 | 檢查 URL、權限、Proxy 與來源站要求的 `headers` |
+| `429 Too Many Requests` | 來源站依頻率、User-Agent、認證或配額限流 | 降低 `concurrency`、增加 `requestDelay`，並設定來源站接受的 `headers` |
 | `job timed out` | 網路或 clone／build 超過總期限 | 增加 `timeout`，用 `--verbose` 找慢點 |
 | `callback is disabled` | YAML 有 callback 但未授權 | 審查設定後才加 `--allow-callback` |
 | `environment variable ... is not set` | `gitArgs`／`cloneArgs` 引用未設定變數 | 執行前 export 對應變數 |

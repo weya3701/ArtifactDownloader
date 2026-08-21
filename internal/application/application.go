@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"strings"
@@ -141,7 +142,7 @@ func resolveOptional(cfg config.Config, path string) string {
 	return cfg.Resolve(path)
 }
 
-// runURLs 讀取 URL 清單並以 job.Concurrency 大小的 worker pool 並行下載。
+// runURLs 讀取 URL 清單，以 job.Concurrency 大小的 worker pool 並行下載，並依設定控制 request 起始間歇。
 // 輸入為 job context、路徑基準 cfg 與 URLs job；輸出為完成檔案數及第一個下載/取消錯誤。
 func (r Runner) runURLs(ctx context.Context, cfg config.Config, job config.Job) (int, error) {
 	urls, err := readURLList(cfg.Resolve(job.URLList))
@@ -182,7 +183,7 @@ func (r Runner) runURLs(ctx context.Context, cfg config.Config, job config.Job) 
 	var mu sync.Mutex
 	var firstErr error
 	completed := 0
-	download := downloader.HTTP{}
+	download := downloader.HTTP{Headers: job.Headers}
 
 	worker := func() {
 		defer wg.Done()
@@ -211,11 +212,18 @@ func (r Runner) runURLs(ctx context.Context, cfg config.Config, job config.Job) 
 		wg.Add(1)
 		go worker()
 	}
-	for _, current := range items {
-		if ctx.Err() != nil {
-			break
+dispatch:
+	for i, current := range items {
+		select {
+		case <-ctx.Done():
+			break dispatch
+		case work <- current:
 		}
-		work <- current
+		if i < len(items)-1 && job.RequestDelay.Enabled() {
+			if err := waitRequestDelay(ctx, job.RequestDelay); err != nil {
+				break dispatch
+			}
+		}
 	}
 	close(work)
 	wg.Wait()
@@ -226,6 +234,24 @@ func (r Runner) runURLs(ctx context.Context, cfg config.Config, job config.Job) 
 		return completed, err
 	}
 	return completed, nil
+}
+
+// waitRequestDelay 在相鄰 request 派送之間等待設定範圍內的隨機時間，並可由 context 提前取消。
+func waitRequestDelay(ctx context.Context, delay config.RequestDelay) error {
+	wait := delay.Min.Value()
+	span := delay.Max.Value() - wait
+	if span > 0 {
+		wait += time.Duration(rand.Int64N(int64(span)))
+	}
+
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 // runPackage 建立暫存或使用指定 workspace、clone repository，解析固定 package 命令後在受控環境執行。

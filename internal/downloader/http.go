@@ -14,7 +14,8 @@ import (
 
 // HTTP 是可注入 http.Client 的下載器；Client 為 nil 時使用 http.DefaultClient。
 type HTTP struct {
-	Client *http.Client
+	Client  *http.Client
+	Headers map[string]string
 }
 
 // Download 以 GET 下載 HTTP/HTTPS 內容，先同步寫入暫存檔，再原子發布到目的路徑。
@@ -23,6 +24,9 @@ func (d HTTP) Download(ctx context.Context, sourceURL, destination string, overw
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, sourceURL, nil)
 	if err != nil {
 		return fmt.Errorf("create request: %w", err)
+	}
+	for name, value := range d.Headers {
+		req.Header.Set(name, value)
 	}
 	client := d.Client
 	if client == nil {

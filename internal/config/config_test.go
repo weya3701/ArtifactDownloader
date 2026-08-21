@@ -31,6 +31,145 @@ func TestLoadAppliesDefaults(t *testing.T) {
 	}
 }
 
+func TestLoadURLRequestDelay(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	data := []byte(`version: 1
+jobs:
+  - name: files
+    type: urls
+    output: ./out
+    urlList: ./urls.txt
+    requestDelay:
+      min: 1s
+      max: 3s
+`)
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	delay := cfg.Jobs[0].RequestDelay
+	if delay.Min.Value() != time.Second || delay.Max.Value() != 3*time.Second {
+		t.Fatalf("requestDelay = %#v", delay)
+	}
+}
+
+func TestLoadURLHeaders(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	data := []byte(`version: 1
+jobs:
+  - name: files
+    type: urls
+    output: ./out
+    urlList: ./urls.txt
+    headers:
+      User-Agent: ArtifactDownloader/1.0
+      Accept: "*/*"
+`)
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	headers := cfg.Jobs[0].Headers
+	if headers["User-Agent"] != "ArtifactDownloader/1.0" || headers["Accept"] != "*/*" {
+		t.Fatalf("headers = %#v", headers)
+	}
+}
+
+func TestURLHeaderValidation(t *testing.T) {
+	base := Job{
+		Name: "files", Type: JobTypeURLs, Output: "out", URLList: "urls.txt",
+		Concurrency: 1, Timeout: Duration(time.Minute),
+	}
+	tests := []struct {
+		name    string
+		headers map[string]string
+		valid   bool
+	}{
+		{name: "common headers", headers: map[string]string{"User-Agent": "ArtifactDownloader/1.0", "Accept": "*/*"}, valid: true},
+		{name: "invalid name", headers: map[string]string{"Bad Header": "value"}},
+		{name: "line break", headers: map[string]string{"X-Test": "first\r\nsecond"}},
+		{name: "managed header", headers: map[string]string{"Content-Length": "10"}},
+		{name: "duplicate case", headers: map[string]string{"User-Agent": "one", "user-agent": "two"}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			job := base
+			job.Headers = test.headers
+			err := (Config{Version: 1, Jobs: []Job{job}}).Validate()
+			if test.valid && err != nil {
+				t.Fatalf("Validate() rejected headers: %v", err)
+			}
+			if !test.valid && err == nil {
+				t.Fatal("Validate() accepted invalid headers")
+			}
+		})
+	}
+}
+
+func TestURLRequestDelayValidation(t *testing.T) {
+	base := Job{
+		Name: "files", Type: JobTypeURLs, Output: "out", URLList: "urls.txt",
+		Concurrency: 1, Timeout: Duration(time.Minute),
+	}
+	tests := []struct {
+		name  string
+		delay RequestDelay
+		valid bool
+	}{
+		{name: "disabled", valid: true},
+		{name: "fixed", delay: RequestDelay{Min: Duration(time.Second), Max: Duration(time.Second)}, valid: true},
+		{name: "range", delay: RequestDelay{Min: Duration(time.Second), Max: Duration(3 * time.Second)}, valid: true},
+		{name: "missing minimum", delay: RequestDelay{Max: Duration(time.Second)}},
+		{name: "missing maximum", delay: RequestDelay{Min: Duration(time.Second)}},
+		{name: "reversed range", delay: RequestDelay{Min: Duration(3 * time.Second), Max: Duration(time.Second)}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			job := base
+			job.RequestDelay = test.delay
+			err := (Config{Version: 1, Jobs: []Job{job}}).Validate()
+			if test.valid && err != nil {
+				t.Fatalf("Validate() rejected request delay: %v", err)
+			}
+			if !test.valid && err == nil {
+				t.Fatal("Validate() accepted invalid request delay")
+			}
+		})
+	}
+}
+
+func TestPackageRejectsRequestDelay(t *testing.T) {
+	cfg := Config{Version: 1, Jobs: []Job{{
+		Name: "build", Type: JobTypePackage, Cache: "cache",
+		Repository: Repository{URL: "repo"}, PackageManager: "gradle",
+		Command: PackageCommand{Action: "build"}, Timeout: Duration(time.Minute),
+		RequestDelay: RequestDelay{Min: Duration(time.Second), Max: Duration(3 * time.Second)},
+	}}}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("Validate() accepted requestDelay on a package job")
+	}
+}
+
+func TestPackageRejectsHeaders(t *testing.T) {
+	cfg := Config{Version: 1, Jobs: []Job{{
+		Name: "build", Type: JobTypePackage, Cache: "cache",
+		Repository: Repository{URL: "repo"}, PackageManager: "gradle",
+		Command: PackageCommand{Action: "build"}, Timeout: Duration(time.Minute),
+		Headers: map[string]string{"User-Agent": "ArtifactDownloader/1.0"},
+	}}}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("Validate() accepted headers on a package job")
+	}
+}
+
 func TestLoadRejectsUnknownFields(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	if err := os.WriteFile(path, []byte("version: 1\nunknown: true\njobs: []\n"), 0o600); err != nil {
@@ -167,6 +306,9 @@ func TestExpandJobEnvironmentFromHost(t *testing.T) {
 			"COLLECTION":    "${ADO_COLLECTION}",
 			"PACKAGE_CACHE": "${ARTIFACT_CACHE}",
 		},
+		Headers: map[string]string{
+			"Authorization": "Bearer ${ADO_COLLECTION}",
+		},
 		Callback: CallbackCommands{{
 			Executable: "./publisher-${PROJECT}",
 			Args:       []string{"${ADO_COLLECTION}", "${ARTIFACT_OUTPUT}"},
@@ -185,6 +327,9 @@ func TestExpandJobEnvironmentFromHost(t *testing.T) {
 	}
 	if expanded.Environment["COLLECTION"] != "collection-name" || expanded.Environment["PACKAGE_CACHE"] != "${ARTIFACT_CACHE}" {
 		t.Fatalf("expanded environment = %#v", expanded.Environment)
+	}
+	if expanded.Headers["Authorization"] != "Bearer collection-name" {
+		t.Fatalf("expanded headers = %#v", expanded.Headers)
 	}
 	if expanded.Callback[0].Executable != "./publisher-project-name" ||
 		expanded.Callback[0].Args[0] != "collection-name" || expanded.Callback[0].Args[1] != "${ARTIFACT_OUTPUT}" {

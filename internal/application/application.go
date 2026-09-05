@@ -17,6 +17,7 @@ import (
 	"artifactdownloader/internal/downloader"
 	"artifactdownloader/internal/environmentconfig"
 	"artifactdownloader/internal/executor"
+	"artifactdownloader/internal/gradlecache"
 	"artifactdownloader/internal/packagecommand"
 	"artifactdownloader/internal/report"
 	"artifactdownloader/internal/repository"
@@ -362,6 +363,11 @@ func (r Runner) runPackage(ctx context.Context, cfg config.Config, job config.Jo
 	if strings.EqualFold(job.PackageManager, "npm") && output != "" {
 		if err := retainNPMInstall(workingDir, output); err != nil {
 			return fmt.Errorf("retain npm install: %w", err)
+		}
+	}
+	if strings.EqualFold(job.PackageManager, "gradle") && output != "" {
+		if _, err := gradlecache.ExportMavenRepository(cache, output); err != nil {
+			return fmt.Errorf("export Gradle cache as Maven repository: %w", err)
 		}
 	}
 	return nil

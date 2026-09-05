@@ -12,4 +12,5 @@ jobs:
     command:
       action: build
     cache: ../artifacts/gradle-cache
+    output: ../artifacts/maven-repository
     timeout: 30m

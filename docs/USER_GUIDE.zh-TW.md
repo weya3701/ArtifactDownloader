@@ -266,7 +266,7 @@ overwrite: true
 | `command.action` | string | 是 | 必須是該 manager 的允許動作 |
 | `environment` | string map | 否 | 此 job 的固定環境變數；值可使用受控路徑變數 |
 | `cache` | string | 是 | 持久化依賴 cache 目錄 |
-| `output` | string | 視情況 | pip 必填；npm 可選；其他 manager 可選 |
+| `output` | string | 視情況 | pip 必填；Gradle 與 npm 可選；其他 manager 可選 |
 
 `workspace`、`cache` 與 `output` 的相對路徑都以 YAML 所在目錄為基準。指定 `workspace` 時，repository 會 clone 到 `<workspace>/repository`，而且工具不會清除該 workspace；未指定時才會建立並自動清理系統暫存 workspace。`workingDirectory` 不可使用 `..` 或 symlink 逃出 clone 的 repository。
 
@@ -274,7 +274,7 @@ overwrite: true
 
 | Manager / action | 實際命令 | Cache 設定 | `output` 行為 |
 | --- | --- | --- | --- |
-| `gradle` / `build` | `gradle build --no-daemon` | `GRADLE_USER_HOME` | 不自動複製 build 產物 |
+| `gradle` / `build` | `gradle build --no-daemon` | `GRADLE_USER_HOME` | 有設定時將依賴整理成 Maven repository layout |
 | `mvn` / `build` | `mvn package --batch-mode -Dmaven.repo.local=<cache>` | 命令參數 | 不自動複製 build 產物 |
 | `npm` / `install` | `npm ci --ignore-scripts` | `npm_config_cache` | 有設定時複製至 `<output>/node_modules` |
 | `npm` / `install-unlocked` | `npm install --ignore-scripts --no-package-lock` | `npm_config_cache` | 有設定時複製至 `<output>/node_modules` |
@@ -341,10 +341,13 @@ jobs:
     command:
       action: build
     cache: ./artifacts/gradle-cache
+    output: ./artifacts/maven-repository
     timeout: 30m
 ```
 
-若專案位於 monorepo 的 `backend`，改為 `workingDirectory: backend`。Gradle 的 `build/` 位於暫存 workspace，正常結束後會被清除；此模式主要保留依賴 cache。若必須永久保存 build 產物，repository 的建置邏輯需將檔案寫入環境變數 `ARTIFACT_OUTPUT` 指定的位置，並在 YAML 設定 `output`。
+若專案位於 monorepo 的 `backend`，改為 `workingDirectory: backend`。build 成功後，工具會把 `<cache>/caches/modules-2/files-2.1/<group>/<artifact>/<version>/<hash>/<file>` 的實體套件整理至 `<output>/<group path>/<artifact>/<version>/<file>`，可作為 Maven file repository 或靜態 repository 的目錄內容；同一套件檔存在多個 cache hash 時採用最後更新者。未設定 `output` 時只保留原始 Gradle cache。
+
+Gradle 專案本身的 `build/` 仍位於暫存 workspace，正常結束後會被清除。若必須永久保存專案的 build 產物，repository 的建置邏輯需另外將檔案寫入環境變數 `ARTIFACT_OUTPUT` 指定的位置。
 
 ### 6.4 場景：Maven 專案
 

@@ -215,7 +215,7 @@ func TestRunnerPackageJob(t *testing.T) {
 	if err := os.MkdirAll(binDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	gradle := []byte("#!/bin/sh\nset -eu\ntest \"$1\" = build\ntest \"$2\" = --no-daemon\ntest \"$POLICY_TARGET_TEST\" = from-policy\ntest \"$PACKAGE_CACHE_TEST\" = \"$ARTIFACT_CACHE\"\ntest \"$PACKAGE_OUTPUT_TEST\" = \"$ARTIFACT_OUTPUT\"\ntest -f \"$PACKAGE_REPOSITORY_TEST/project/build.gradle\"\ntest -f \"$PACKAGE_WORKSPACE_TEST/repository/project/build.gradle\"\nprintf artifact > \"$ARTIFACT_OUTPUT/result.txt\"\nprintf cache > \"$ARTIFACT_CACHE/cache-used.txt\"\n")
+	gradle := []byte("#!/bin/sh\nset -eu\ntest \"$1\" = build\ntest \"$2\" = --no-daemon\ntest \"$POLICY_TARGET_TEST\" = from-policy\ntest \"$PACKAGE_CACHE_TEST\" = \"$ARTIFACT_CACHE\"\ntest \"$PACKAGE_OUTPUT_TEST\" = \"$ARTIFACT_OUTPUT\"\ntest \"$GRADLE_USER_HOME\" = \"$ARTIFACT_CACHE\"\ntest -f \"$PACKAGE_REPOSITORY_TEST/project/build.gradle\"\ntest -f \"$PACKAGE_WORKSPACE_TEST/repository/project/build.gradle\"\nprintf artifact > \"$ARTIFACT_OUTPUT/result.txt\"\nprintf cache > \"$ARTIFACT_CACHE/cache-used.txt\"\npackage_dir=\"$GRADLE_USER_HOME/caches/modules-2/files-2.1/com.example/demo/1.2.3/test-hash\"\nmkdir -p \"$package_dir\"\nprintf jar > \"$package_dir/demo-1.2.3.jar\"\nprintf pom > \"$package_dir/demo-1.2.3.pom\"\n")
 	if err := os.WriteFile(filepath.Join(binDir, "gradle"), gradle, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -283,6 +283,18 @@ func TestRunnerPackageJob(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, "cache", "cache-used.txt")); err != nil {
 		t.Fatalf("package cache was not retained: %v", err)
+	}
+	for filename, want := range map[string]string{
+		"demo-1.2.3.jar": "jar",
+		"demo-1.2.3.pom": "pom",
+	} {
+		data, err := os.ReadFile(filepath.Join(dir, "artifacts", "com", "example", "demo", "1.2.3", filename))
+		if err != nil {
+			t.Fatalf("read Maven repository artifact %s: %v", filename, err)
+		}
+		if string(data) != want {
+			t.Fatalf("Maven repository artifact %s = %q", filename, data)
+		}
 	}
 	if _, err := os.Stat(filepath.Join(dir, "workspace", "repository", "project", "build.gradle")); err != nil {
 		t.Fatalf("configured workspace was not retained: %v", err)

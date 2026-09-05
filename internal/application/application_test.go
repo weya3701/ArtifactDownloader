@@ -311,30 +311,61 @@ func TestExpandVariables(t *testing.T) {
 func TestRetainNPMInstall(t *testing.T) {
 	dir := t.TempDir()
 	workingDir := filepath.Join(dir, "repository")
-	sourcePackage := filepath.Join(workingDir, "node_modules", "example-package")
+	sourceModules := filepath.Join(workingDir, "node_modules")
 	output := filepath.Join(dir, "output")
-	if err := os.MkdirAll(sourcePackage, 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(sourceModules, "stale-package"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.MkdirAll(filepath.Join(output, "node_modules", "stale-package"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(output, "node_modules", "legacy-package"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(sourcePackage, "index.js"), []byte("module.exports = true"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(output, "unmanaged.txt"), []byte("keep"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
 	if err := retainNPMInstall(workingDir, output); err != nil {
 		t.Fatal(err)
 	}
-	data, err := os.ReadFile(filepath.Join(output, "node_modules", "example-package", "index.js"))
+	if err := os.RemoveAll(filepath.Join(sourceModules, "stale-package")); err != nil {
+		t.Fatal(err)
+	}
+	for path, content := range map[string]string{
+		filepath.Join(sourceModules, "example-package", "index.js"):            "module.exports = true",
+		filepath.Join(sourceModules, "@example", "scoped-package", "index.js"): "module.exports = 'scoped'",
+	} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := retainNPMInstall(workingDir, output); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(output, "example-package", "index.js"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if string(data) != "module.exports = true" {
 		t.Fatalf("retained package content = %q", data)
 	}
-	if _, err := os.Stat(filepath.Join(output, "node_modules", "stale-package")); !os.IsNotExist(err) {
+	data, err = os.ReadFile(filepath.Join(output, "@example", "scoped-package", "index.js"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "module.exports = 'scoped'" {
+		t.Fatalf("retained scoped package content = %q", data)
+	}
+	if _, err := os.Stat(filepath.Join(output, "stale-package")); !os.IsNotExist(err) {
 		t.Fatalf("stale package was not removed: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(output, "node_modules")); !os.IsNotExist(err) {
+		t.Fatalf("legacy node_modules was not removed: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(output, "unmanaged.txt")); err != nil {
+		t.Fatalf("unmanaged output was not preserved: %v", err)
 	}
 }
 

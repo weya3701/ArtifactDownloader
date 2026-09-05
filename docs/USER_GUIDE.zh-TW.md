@@ -276,8 +276,8 @@ overwrite: true
 | --- | --- | --- | --- |
 | `gradle` / `build` | `gradle build --no-daemon` | `GRADLE_USER_HOME` | 有設定時將依賴整理成 Maven repository layout |
 | `mvn` / `build` | `mvn package --batch-mode -Dmaven.repo.local=<cache>` | 命令參數 | 不自動複製 build 產物 |
-| `npm` / `install` | `npm ci --ignore-scripts` | `npm_config_cache` | 有設定時複製至 `<output>/node_modules` |
-| `npm` / `install-unlocked` | `npm install --ignore-scripts --no-package-lock` | `npm_config_cache` | 有設定時複製至 `<output>/node_modules` |
+| `npm` / `install` | `npm ci --ignore-scripts` | `npm_config_cache` | 有設定時將套件直接複製至 `<output>` |
+| `npm` / `install-unlocked` | `npm install --ignore-scripts --no-package-lock` | `npm_config_cache` | 有設定時將套件直接複製至 `<output>` |
 | `yarn` / `install` | `yarn install --immutable --ignore-scripts` | `YARN_CACHE_FOLDER` | 不自動複製安裝產物 |
 | `pip` / `download` | `python3 -m pip download -r requirements.txt --dest <output>` | `PIP_CACHE_DIR` | 套件檔直接寫入 `output` |
 
@@ -390,7 +390,7 @@ jobs:
     timeout: 20m
 ```
 
-`install` 使用 `npm ci`，repository 必須有相容的 `package-lock.json` 或 `npm-shrinkwrap.json`。成功後，既有 `<output>/node_modules` 會由本次結果取代。為降低執行不可信程式碼的風險，npm lifecycle scripts 會被停用。
+`install` 使用 `npm ci`，repository 必須有相容的 `package-lock.json` 或 `npm-shrinkwrap.json`。成功後，`node_modules` 內的每個頂層項目會直接寫入 `<output>`；例如 `example-package` 會位於 `<output>/example-package`，scope 套件會位於 `<output>/@scope/package`，不會建立 `<output>/node_modules`。先前由工具匯出的套件會由本次結果取代。為降低執行不可信程式碼的風險，npm lifecycle scripts 會被停用。
 
 ### 6.6 場景：npm 沒有 lockfile
 
@@ -751,7 +751,7 @@ workspace: .
 - URL 清單沒有不同 URL 的同名檔案，並依需求選擇 `overwrite`。
 - Package manager 與 action 組合存在於固定命令表。
 - `workingDirectory` 指向 repository 內含必要專案檔案的目錄。
-- pip 有 `output`；npm 若要保留 `node_modules` 也有 `output`。
+- pip 有 `output`；npm 若要保留安裝後的套件也有 `output`。
 - `timeout` 涵蓋下載、clone、命令與 callback 的總耗時。
 - 私有 Git 認證與 package secret 不直接寫入 YAML。
 - 正式環境採最小權限環境政策；只對可信來源啟用 callback 或完整環境繼承。

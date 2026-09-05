@@ -3,6 +3,7 @@ package application
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -373,8 +374,10 @@ func (r Runner) runPackage(ctx context.Context, cfg config.Config, job config.Jo
 	return nil
 }
 
-// retainNPMInstall 將 npm ci 產生的 node_modules 複製到持久化 output/node_modules。
-// 輸入為 npm 工作目錄與已解析的 output；成功時以本次安裝結果取代舊內容。
+const npmOutputManifest = ".artifact-downloader-npm-manifest.json"
+
+// retainNPMInstall 將 npm ci 產生的 node_modules 內容直接複製到持久化 output。
+// 輸入為 npm 工作目錄與已解析的 output；成功時以本次安裝結果取代先前匯出的套件。
 func retainNPMInstall(workingDir, output string) error {
 	source := filepath.Join(workingDir, "node_modules")
 	if stat, err := os.Stat(source); err != nil {
@@ -383,25 +386,86 @@ func retainNPMInstall(workingDir, output string) error {
 		return fmt.Errorf("source node_modules is not a directory: %s", source)
 	}
 
-	staging, err := os.MkdirTemp(output, ".node_modules-*")
+	entries, err := os.ReadDir(source)
+	if err != nil {
+		return fmt.Errorf("list source node_modules: %w", err)
+	}
+	currentNames := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		currentNames = append(currentNames, entry.Name())
+	}
+
+	previousNames, err := readNPMOutputManifest(output)
+	if err != nil {
+		return err
+	}
+
+	staging, err := os.MkdirTemp(output, ".npm-install-*")
 	if err != nil {
 		return fmt.Errorf("create staging directory: %w", err)
 	}
 	defer os.RemoveAll(staging)
 
-	stagedModules := filepath.Join(staging, "node_modules")
-	if err := os.CopyFS(stagedModules, os.DirFS(source)); err != nil {
+	stagedPackages := filepath.Join(staging, "packages")
+	if err := os.CopyFS(stagedPackages, os.DirFS(source)); err != nil {
 		return fmt.Errorf("copy node_modules: %w", err)
 	}
-
-	destination := filepath.Join(output, "node_modules")
-	if err := os.RemoveAll(destination); err != nil {
-		return fmt.Errorf("remove previous node_modules: %w", err)
+	manifest, err := json.Marshal(currentNames)
+	if err != nil {
+		return fmt.Errorf("encode npm output manifest: %w", err)
 	}
-	if err := os.Rename(stagedModules, destination); err != nil {
-		return fmt.Errorf("publish node_modules: %w", err)
+	stagedManifest := filepath.Join(staging, npmOutputManifest)
+	if err := os.WriteFile(stagedManifest, manifest, 0o644); err != nil {
+		return fmt.Errorf("write npm output manifest: %w", err)
+	}
+
+	removeNames := make(map[string]struct{}, len(previousNames)+len(currentNames)+1)
+	for _, name := range previousNames {
+		removeNames[name] = struct{}{}
+	}
+	for _, name := range currentNames {
+		removeNames[name] = struct{}{}
+	}
+	// 清理由舊版程式產生的 output/node_modules，讓升級後不再保留這一層目錄。
+	removeNames["node_modules"] = struct{}{}
+	for name := range removeNames {
+		if err := os.RemoveAll(filepath.Join(output, name)); err != nil {
+			return fmt.Errorf("remove previous npm output %q: %w", name, err)
+		}
+	}
+
+	for _, name := range currentNames {
+		if err := os.Rename(filepath.Join(stagedPackages, name), filepath.Join(output, name)); err != nil {
+			return fmt.Errorf("publish npm package %q: %w", name, err)
+		}
+	}
+	if err := os.Rename(stagedManifest, filepath.Join(output, npmOutputManifest)); err != nil {
+		return fmt.Errorf("publish npm output manifest: %w", err)
 	}
 	return nil
+}
+
+// readNPMOutputManifest 讀取前一次由 retainNPMInstall 寫入的 output 頂層項目名稱。
+// manifest 不存在時視為首次匯出；名稱不合法時拒絕刪除任何既有路徑。
+func readNPMOutputManifest(output string) ([]string, error) {
+	data, err := os.ReadFile(filepath.Join(output, npmOutputManifest))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read npm output manifest: %w", err)
+	}
+
+	var names []string
+	if err := json.Unmarshal(data, &names); err != nil {
+		return nil, fmt.Errorf("decode npm output manifest: %w", err)
+	}
+	for _, name := range names {
+		if name == "" || name == "." || name == ".." || filepath.Base(name) != name {
+			return nil, fmt.Errorf("invalid npm output manifest entry %q", name)
+		}
+	}
+	return names, nil
 }
 
 // expandVariables 只替換呼叫端明確提供的 ${NAME} 變數，不進行 shell 展開。

@@ -76,7 +76,6 @@ func Resolve(manager, action string, variables Variables) (Spec, error) {
 		if variables.Output == "" {
 			return Spec{}, errorsForOutput(manager, action)
 		}
-		fmt.Println("variables output: ", variables.Output)
 		spec.Executable = "python3"
 		spec.Args = []string{"-m", "pip", "download", "-r", "requirements.txt", "--dest", variables.Output}
 		spec.Environment["PIP_CACHE_DIR"] = variables.Cache

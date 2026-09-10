@@ -9,6 +9,8 @@ jobs:
       depth: 1
     workingDirectory: .
     packageManager: gradle
+    # 選填，只套用於 Gradle 下載依賴；Git clone proxy 請使用 repository.gitArgs。
+    # proxy: http://proxy.example.com:8080
     command:
       action: build
     cache: ../artifacts/gradle-cache

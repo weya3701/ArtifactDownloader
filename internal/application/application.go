@@ -20,6 +20,7 @@ import (
 	"artifactdownloader/internal/executor"
 	"artifactdownloader/internal/gradlecache"
 	"artifactdownloader/internal/packagecommand"
+	"artifactdownloader/internal/packageproxy"
 	"artifactdownloader/internal/report"
 	"artifactdownloader/internal/repository"
 )
@@ -323,6 +324,11 @@ func (r Runner) runPackage(ctx context.Context, cfg config.Config, job config.Jo
 	if err != nil {
 		return fmt.Errorf("resolve package command: %w", err)
 	}
+	proxyEnvironment, cleanupProxy, err := configurePackageProxy(job.PackageManager, job.Proxy, &spec)
+	if err != nil {
+		return err
+	}
+	defer cleanupProxy()
 
 	variables := map[string]string{
 		"ARTIFACT_CACHE":  cache,
@@ -353,6 +359,9 @@ func (r Runner) runPackage(ctx context.Context, cfg config.Config, job config.Jo
 		}
 		environment[name] = value
 	}
+	for name, value := range proxyEnvironment {
+		environment[name] = value
+	}
 
 	runner := executor.Command{}
 	if err := runner.Run(ctx, spec.Executable, spec.Args, executor.Options{
@@ -372,6 +381,54 @@ func (r Runner) runPackage(ctx context.Context, cfg config.Config, job config.Jo
 		}
 	}
 	return nil
+}
+
+// configurePackageProxy applies native proxy settings to a resolved package command.
+func configurePackageProxy(manager, value string, spec *packagecommand.Spec) (map[string]string, func(), error) {
+	cleanup := func() {}
+	if strings.TrimSpace(value) == "" {
+		return nil, cleanup, nil
+	}
+	proxy, err := packageproxy.Parse(value)
+	if err != nil {
+		return nil, cleanup, fmt.Errorf("resolve package proxy: %w", err)
+	}
+
+	switch strings.ToLower(strings.TrimSpace(manager)) {
+	case "gradle":
+		spec.Args = append(proxy.GradleArguments(), spec.Args...)
+	case "mvn":
+		settings, err := proxy.MavenSettings()
+		if err != nil {
+			return nil, cleanup, err
+		}
+		settingsPath, err := writeMavenProxySettings(settings)
+		if err != nil {
+			return nil, cleanup, err
+		}
+		spec.Args = append([]string{"--settings", settingsPath}, spec.Args...)
+		cleanup = func() { _ = os.Remove(settingsPath) }
+	}
+	return proxy.Environment(manager), cleanup, nil
+}
+
+// writeMavenProxySettings writes generated Maven proxy configuration to a private temporary file.
+func writeMavenProxySettings(data []byte) (string, error) {
+	file, err := os.CreateTemp("", "artifact-downloader-maven-settings-*.xml")
+	if err != nil {
+		return "", fmt.Errorf("create Maven proxy settings: %w", err)
+	}
+	path := file.Name()
+	if _, err := file.Write(data); err != nil {
+		_ = file.Close()
+		_ = os.Remove(path)
+		return "", fmt.Errorf("write Maven proxy settings: %w", err)
+	}
+	if err := file.Close(); err != nil {
+		_ = os.Remove(path)
+		return "", fmt.Errorf("close Maven proxy settings: %w", err)
+	}
+	return path, nil
 }
 
 const npmOutputManifest = ".artifact-downloader-npm-manifest.json"

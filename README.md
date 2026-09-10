@@ -119,6 +119,8 @@ jobs:
     workspace: .
     workingDirectory: backend
     packageManager: gradle
+    # 選填；只套用到 package manager，不影響 Git clone。
+    proxy: http://proxy.example.com:8080
     command:
       action: build
     environment:
@@ -145,7 +147,7 @@ jobs:
 
 `cache` 是 package job 的必填欄位。除 pip `download` action 外，`output` 是選填路徑。Gradle job 設定 `output` 時，工具會在 build 成功後將 `caches/modules-2/files-2.1` 內的 JAR、POM、AAR、Gradle module metadata 等實體檔整理至 `<output>/<group path>/<artifact>/<version>/<file>`；未設定時只保留原始 Gradle cache。npm job 設定 `output` 時，工具會在安裝成功後將 `node_modules` 內的套件直接複製至 `<output>`，不建立外層 `node_modules`；未設定時仍只執行安裝。其他 package manager 不會自動複製建構產物，repository 內的建構邏輯必須明確將產物寫入 `ARTIFACT_OUTPUT` 指定的目錄。
 
-Package job 不接受自訂 executable 或 args；無法匹配的 manager/action 會在設定驗證階段被拒絕。可透過 `environment` map 為個別 package job 設定固定環境變數，值中可使用 `${ARTIFACT_CACHE}`、`${ARTIFACT_OUTPUT}`、`${WORKSPACE}` 與 `${REPOSITORY_DIR}`。搭配 `--inherit-environment` 時，也可在 `repository.url`、`repository.ref`、`workspace`、`workingDirectory`、`packageManager`、`command.action`、`cache`、`output`、`urlList`、URL `headers` 值、job `environment` 與 callback 設定中引用主機的 `${ENV_VAR}`。工具只使用系統安裝的 package manager，不執行 repository 內的 `gradlew` 或 `mvnw` wrapper。
+Package job 不接受自訂 executable 或 args；無法匹配的 manager/action 會在設定驗證階段被拒絕。可透過 `environment` map 為個別 package job 設定固定環境變數，值中可使用 `${ARTIFACT_CACHE}`、`${ARTIFACT_OUTPUT}`、`${WORKSPACE}` 與 `${REPOSITORY_DIR}`。搭配 `--inherit-environment` 時，也可在 `repository.url`、`repository.ref`、`workspace`、`workingDirectory`、`packageManager`、`proxy`、`command.action`、`cache`、`output`、`urlList`、URL `headers` 值、job `environment` 與 callback 設定中引用主機的 `${ENV_VAR}`。工具只使用系統安裝的 package manager，不執行 repository 內的 `gradlew` 或 `mvnw` wrapper。
 
 目前支援的動作與固定命令如下：
 
@@ -179,7 +181,15 @@ command:
 | Yarn | `YARN_CACHE_FOLDER=<cache>` |
 | pip | `PIP_CACHE_DIR=<cache>` |
 
-Package 命令使用最小環境，不會繼承程序中的任意 token 或 secret。保留的系統變數僅包含 `PATH`、locale、暫存目錄及常見 HTTP proxy 變數，並提供：
+Package job 可設定單一 `proxy` URL，同時套用 HTTP 與 HTTPS 套件下載：
+
+```yaml
+proxy: http://proxy.example.com:8080
+```
+
+只接受 `http://` 或 `https://` URL，可包含 URL 編碼後的 Basic Auth 帳密。npm、pip 與 Yarn 會使用各自的原生 proxy 環境設定；Gradle 會使用 JVM system properties；Maven 會使用執行期間建立、結束後刪除的私人 `settings.xml`。此欄位不影響 Git clone；Git proxy 仍使用下方的 `repository.gitArgs`。若 proxy 含帳密，不要將其直接提交至 YAML，可設定 `proxy: ${PACKAGE_PROXY}`，再透過 `--inherit-environment` 由主機環境展開。
+
+未設定 `proxy` 時，Package 命令仍沿用既有行為：最小環境會保留啟動程序中的常見 HTTP proxy 變數。Package 命令不會繼承其他任意 token 或 secret，並提供：
 
 - `${ARTIFACT_CACHE}`：`cache` 的絕對路徑。
 - `${ARTIFACT_OUTPUT}`：`output` 的絕對路徑；未設定時為空字串。

@@ -259,6 +259,11 @@ func waitRequestDelay(ctx context.Context, delay config.RequestDelay) error {
 // runPackage 建立暫存或使用指定 workspace、clone repository，解析固定 package 命令後在受控環境執行。
 // 輸入為 job context、路徑基準 cfg 與 package job；成功輸出 nil，任一準備或執行階段失敗則輸出錯誤。
 func (r Runner) runPackage(ctx context.Context, cfg config.Config, job config.Job) error {
+	configFiles, err := resolvePackageConfigFiles(cfg, job.Command.ConfigFiles)
+	if err != nil {
+		return err
+	}
+
 	workspace := ""
 	if strings.TrimSpace(job.Workspace) != "" {
 		workspace = cfg.Resolve(job.Workspace)
@@ -318,7 +323,7 @@ func (r Runner) runPackage(ctx context.Context, cfg config.Config, job config.Jo
 	}
 
 	spec, err := packagecommand.Resolve(job.PackageManager, job.Command.Action, packagecommand.Variables{
-		Cache: cache, Output: output, Home: workspace,
+		Cache: cache, Output: output, Home: workspace, ConfigFiles: configFiles,
 	})
 	if err != nil {
 		return fmt.Errorf("resolve package command: %w", err)
@@ -372,6 +377,24 @@ func (r Runner) runPackage(ctx context.Context, cfg config.Config, job config.Jo
 		}
 	}
 	return nil
+}
+
+// resolvePackageConfigFiles 以任務 YAML 為基準解析外部設定檔，並確認每個路徑是可讀取的一般檔案。
+// 輸入為全域設定與已驗證清單；輸出為包含絕對路徑的副本，檔案不存在或非一般檔案時輸出錯誤。
+func resolvePackageConfigFiles(cfg config.Config, configFiles []packagecommand.ConfigFile) ([]packagecommand.ConfigFile, error) {
+	resolved := make([]packagecommand.ConfigFile, len(configFiles))
+	for i, configFile := range configFiles {
+		path := cfg.Resolve(configFile.Path)
+		info, err := os.Stat(path)
+		if err != nil {
+			return nil, fmt.Errorf("inspect command.configFiles[%d].path: %w", i, err)
+		}
+		if !info.Mode().IsRegular() {
+			return nil, fmt.Errorf("command.configFiles[%d].path is not a regular file: %s", i, path)
+		}
+		resolved[i] = packagecommand.ConfigFile{Type: configFile.Type, Path: path}
+	}
+	return resolved, nil
 }
 
 const npmOutputManifest = ".artifact-downloader-npm-manifest.json"

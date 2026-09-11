@@ -248,6 +248,9 @@ overwrite: true
   packageManager: npm
   command:
     action: install
+    configFiles:
+      - type: userconfig
+        path: ./config/npmrc
   cache: ./artifacts/npm-cache
   output: ./artifacts/npm-output
   timeout: 30m
@@ -264,11 +267,12 @@ overwrite: true
 | `workingDirectory` | string | 否 | repository 內執行命令的目錄；空值等同根目錄 |
 | `packageManager` | string | 是 | `gradle`、`mvn`、`npm`、`yarn`、`pip` |
 | `command.action` | string | 是 | 必須是該 manager 的允許動作 |
+| `command.configFiles` | object list | 否 | 交給 manager 的外部設定檔；每項包含 `type` 與 `path` |
 | `environment` | string map | 否 | 此 job 的固定環境變數；值可使用受控路徑變數 |
 | `cache` | string | 是 | 持久化依賴 cache 目錄 |
 | `output` | string | 視情況 | pip 必填；Gradle 與 npm 可選；其他 manager 可選 |
 
-`workspace`、`cache` 與 `output` 的相對路徑都以 YAML 所在目錄為基準。指定 `workspace` 時，repository 會 clone 到 `<workspace>/repository`，而且工具不會清除該 workspace；未指定時才會建立並自動清理系統暫存 workspace。`workingDirectory` 不可使用 `..` 或 symlink 逃出 clone 的 repository。
+`workspace`、`cache`、`output` 與 `command.configFiles[].path` 的相對路徑都以 YAML 所在目錄為基準。指定 `workspace` 時，repository 會 clone 到 `<workspace>/repository`，而且工具不會清除該 workspace；未指定時才會建立並自動清理系統暫存 workspace。`workingDirectory` 不可使用 `..` 或 symlink 逃出 clone 的 repository。外部設定檔必須在 package job 開始前已存在且是一般檔案；它不會從 clone 後的 repository 路徑尋找。
 
 ### 6.2 固定命令與產物
 
@@ -281,7 +285,23 @@ overwrite: true
 | `yarn` / `install` | `yarn install --immutable --ignore-scripts` | `YARN_CACHE_FOLDER` | 不自動複製安裝產物 |
 | `pip` / `download` | `python3 -m pip download -r requirements.txt --dest <output>` | `PIP_CACHE_DIR` | 套件檔直接寫入 `output` |
 
-設定檔不能自訂 package executable 或 args。這是安全邊界，也是可預測性的來源。
+設定檔不能自訂 package executable 或 args。`command.configFiles` 只會依 manager/type 加入下列固定旗標或環境變數：
+
+| Manager | `type` | 套用方式 | 可重複 |
+| --- | --- | --- | --- |
+| `gradle` | `init-script` | `--init-script <path>` | 是 |
+| `mvn` | `settings` | `--settings <path>` | 否 |
+| `mvn` | `global-settings` | `--global-settings <path>` | 否 |
+| `mvn` | `toolchains` | `--toolchains <path>` | 否 |
+| `mvn` | `global-toolchains` | `--global-toolchains <path>` | 否 |
+| `npm` | `userconfig` | `--userconfig <path>` | 否 |
+| `npm` | `globalconfig` | `--globalconfig <path>` | 否 |
+| `pip` | `config-file` | `PIP_CONFIG_FILE=<path>` | 否 |
+
+未列出的組合會在設定驗證階段被拒絕；Yarn 目前沒有支援的外部設定檔類型。Gradle 已淘汰自訂
+settings/build file 的舊命令列選項，因此本工具只支援官方仍提供的 `init-script`。外部設定檔可能
+包含下載來源與憑證；Gradle init script 更會在 repository 的 settings/build script 前執行程式碼，
+所以都只能使用可信檔案。
 
 `environment` 可為單一 package job 加入非敏感固定值：
 
@@ -294,7 +314,7 @@ environment:
 
 值中可使用 `${ARTIFACT_CACHE}`、`${ARTIFACT_OUTPUT}`、`${WORKSPACE}` 與 `${REPOSITORY_DIR}`，並在執行 job 時展開為絕對路徑。環境變數名稱必須符合一般識別字格式。`ARTIFACT_CACHE`、`ARTIFACT_OUTPUT`、`HOME`、`GRADLE_USER_HOME`、`PIP_CACHE_DIR`、`npm_config_cache` 與 `YARN_CACHE_FOLDER` 由工具管理，不能在 job 中覆寫。`environment` 只套用於 package 命令，不會套用到 Git clone 或 callback。
 
-使用 `--inherit-environment` 時，`repository.url`、`repository.ref`、`workspace`、`workingDirectory`、`packageManager`、`command.action`、`cache`、`output`、`urlList`、URL `headers` 值、job `environment`、callback executable 與 args 也可引用啟動程序的 `${ENV_VAR}`：
+使用 `--inherit-environment` 時，`repository.url`、`repository.ref`、`workspace`、`workingDirectory`、`packageManager`、`command.action`、`command.configFiles[].path`、`cache`、`output`、`urlList`、URL `headers` 值、job `environment`、callback executable 與 args 也可引用啟動程序的 `${ENV_VAR}`：
 
 ```bash
 export PROJECT=my-project
@@ -340,12 +360,17 @@ jobs:
     packageManager: gradle
     command:
       action: build
+      configFiles:
+        - type: init-script
+          path: ./config/init.gradle
     cache: ./artifacts/gradle-cache
     output: ./artifacts/maven-repository
     timeout: 30m
 ```
 
-若專案位於 monorepo 的 `backend`，改為 `workingDirectory: backend`。build 成功後，工具會把 `<cache>/caches/modules-2/files-2.1/<group>/<artifact>/<version>/<hash>/<file>` 的實體套件整理至 `<output>/<group path>/<artifact>/<version>/<file>`，可作為 Maven file repository 或靜態 repository 的目錄內容；同一套件檔存在多個 cache hash 時採用最後更新者。未設定 `output` 時只保留原始 Gradle cache。
+上述設定會執行 `gradle build --no-daemon --init-script <設定檔絕對路徑>`。可加入多個
+`init-script`，工具會依 YAML 順序重複加入旗標。若專案位於 monorepo 的 `backend`，改為
+`workingDirectory: backend`。build 成功後，工具會把 `<cache>/caches/modules-2/files-2.1/<group>/<artifact>/<version>/<hash>/<file>` 的實體套件整理至 `<output>/<group path>/<artifact>/<version>/<file>`，可作為 Maven file repository 或靜態 repository 的目錄內容；同一套件檔存在多個 cache hash 時採用最後更新者。未設定 `output` 時只保留原始 Gradle cache。
 
 Gradle 專案本身的 `build/` 仍位於暫存 workspace，正常結束後會被清除。若必須永久保存專案的 build 產物，repository 的建置邏輯需另外將檔案寫入環境變數 `ARTIFACT_OUTPUT` 指定的位置。
 

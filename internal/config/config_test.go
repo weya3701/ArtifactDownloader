@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"artifactdownloader/internal/packagecommand"
 )
 
 func TestLoadAppliesDefaults(t *testing.T) {
@@ -256,6 +258,36 @@ jobs:
 	}
 }
 
+func TestLoadPackageConfigFiles(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	data := []byte(`version: 1
+jobs:
+  - name: gradle
+    type: package
+    cache: ./cache
+    packageManager: gradle
+    repository:
+      url: https://example.test/repository.git
+    command:
+      action: build
+      configFiles:
+        - type: init-script
+          path: ./config/init.gradle
+`)
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	configFiles := cfg.Jobs[0].Command.ConfigFiles
+	if len(configFiles) != 1 || configFiles[0].Type != "init-script" || configFiles[0].Path != "./config/init.gradle" {
+		t.Fatalf("configFiles = %#v", configFiles)
+	}
+}
+
 func TestLoadAcceptsTemplatedPackageCommand(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	data := []byte(`version: 1
@@ -296,7 +328,10 @@ func TestExpandJobEnvironmentFromHost(t *testing.T) {
 
 	job := Job{
 		Output: "${OUTPUT}", Cache: "./cache", Workspace: "${PIPELINE_WORKSPACE}", WorkingDirectory: "${WORKDIR}",
-		PackageManager: "${PKGMANAGER}", Command: PackageCommand{Action: "${ACTION}"},
+		PackageManager: "${PKGMANAGER}", Command: PackageCommand{
+			Action:      "${ACTION}",
+			ConfigFiles: []packagecommand.ConfigFile{{Type: "userconfig", Path: "${OUTPUT}/npmrc"}},
+		},
 		Repository: Repository{
 			URL:     "https://dev.azure.com/org/${PROJECT}/_git/${REPOSITORY}",
 			Ref:     "${BRANCH}",
@@ -325,6 +360,12 @@ func TestExpandJobEnvironmentFromHost(t *testing.T) {
 		expanded.PackageManager != "npm" || expanded.Command.Action != "install-unlocked" {
 		t.Fatalf("expanded job fields = %#v", expanded)
 	}
+	if expanded.Command.ConfigFiles[0].Path != "./artifacts/npmrc" {
+		t.Fatalf("expanded config file path = %q", expanded.Command.ConfigFiles[0].Path)
+	}
+	if job.Command.ConfigFiles[0].Path != "${OUTPUT}/npmrc" {
+		t.Fatalf("ExpandJobEnvironment() mutated input config file path: %q", job.Command.ConfigFiles[0].Path)
+	}
 	if expanded.Environment["COLLECTION"] != "collection-name" || expanded.Environment["PACKAGE_CACHE"] != "${ARTIFACT_CACHE}" {
 		t.Fatalf("expanded environment = %#v", expanded.Environment)
 	}
@@ -337,6 +378,21 @@ func TestExpandJobEnvironmentFromHost(t *testing.T) {
 	}
 	if expanded.Repository.GitArgs[0] != "header=${ADO_AUTH_HEADER}" {
 		t.Fatalf("gitArgs should remain deferred: %#v", expanded.Repository.GitArgs)
+	}
+}
+
+func TestPackageRejectsUnsupportedConfigFileType(t *testing.T) {
+	cfg := Config{Version: 1, Jobs: []Job{{
+		Name: "gradle", Type: JobTypePackage, Cache: "cache",
+		Repository: Repository{URL: "repo"}, PackageManager: "gradle",
+		Command: PackageCommand{
+			Action:      "build",
+			ConfigFiles: []packagecommand.ConfigFile{{Type: "settings-file", Path: "settings.gradle"}},
+		},
+		Timeout: Duration(time.Minute),
+	}}}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("Validate() accepted an unsupported Gradle config file type")
 	}
 }
 
@@ -393,6 +449,17 @@ func TestURLJobRejectsEnvironment(t *testing.T) {
 	}}}
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("Validate() accepted environment on a URL job")
+	}
+}
+
+func TestURLJobRejectsPackageConfigFiles(t *testing.T) {
+	cfg := Config{Version: 1, Jobs: []Job{{
+		Name: "files", Type: JobTypeURLs, Output: "out", URLList: "urls.txt",
+		Concurrency: 1, Timeout: Duration(time.Minute),
+		Command: PackageCommand{ConfigFiles: []packagecommand.ConfigFile{{Type: "init-script", Path: "init.gradle"}}},
+	}}}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("Validate() accepted command.configFiles on a URL job")
 	}
 }
 

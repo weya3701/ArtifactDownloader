@@ -5,11 +5,18 @@ import (
 	"strings"
 )
 
-// Variables 提供固定命令建構時使用的 cache、output 與隔離 home 路徑。
+// Variables 提供固定命令建構時使用的 cache、output、隔離 home 路徑與外部設定檔。
 type Variables struct {
-	Cache  string
-	Output string
-	Home   string
+	Cache       string
+	Output      string
+	Home        string
+	ConfigFiles []ConfigFile
+}
+
+// ConfigFile 描述套件管理器可透過固定旗標或受控環境變數載入的外部設定檔。
+type ConfigFile struct {
+	Type string `yaml:"type"`
+	Path string `yaml:"path"`
 }
 
 // Spec 是驗證後可交給 executor 的固定執行檔、參數與必要環境。
@@ -35,12 +42,40 @@ func Validate(manager, action string) error {
 	}
 }
 
+// ValidateConfigFiles 檢查外部設定檔的 type、path、manager 相容性及不可重複的類型。
+// 輸入為套件管理器與設定檔清單；合法時輸出 nil，不支援或缺少欄位時輸出定位錯誤。
+func ValidateConfigFiles(manager string, configFiles []ConfigFile) error {
+	manager = strings.ToLower(strings.TrimSpace(manager))
+	seen := make(map[string]struct{}, len(configFiles))
+	for i, configFile := range configFiles {
+		configType := strings.ToLower(strings.TrimSpace(configFile.Type))
+		if configType == "" {
+			return fmt.Errorf("command.configFiles[%d].type is required", i)
+		}
+		if strings.TrimSpace(configFile.Path) == "" {
+			return fmt.Errorf("command.configFiles[%d].path is required", i)
+		}
+		repeatable, err := configFileRepeatable(manager, configType)
+		if err != nil {
+			return fmt.Errorf("command.configFiles[%d]: %w", i, err)
+		}
+		if _, exists := seen[configType]; exists && !repeatable {
+			return fmt.Errorf("command.configFiles[%d]: type %q cannot be specified more than once", i, configType)
+		}
+		seen[configType] = struct{}{}
+	}
+	return nil
+}
+
 // Resolve 將合法 manager/action 與路徑變數解析為不可任意改寫的命令規格。
 // 輸入為 manager、action 與 Variables；輸出為 Spec，組合不合法或缺少必要 output 時輸出錯誤。
 func Resolve(manager, action string, variables Variables) (Spec, error) {
 	manager = strings.ToLower(strings.TrimSpace(manager))
 	action = strings.ToLower(strings.TrimSpace(action))
 	if err := Validate(manager, action); err != nil {
+		return Spec{}, err
+	}
+	if err := ValidateConfigFiles(manager, variables.ConfigFiles); err != nil {
 		return Spec{}, err
 	}
 
@@ -83,7 +118,41 @@ func Resolve(manager, action string, variables Variables) (Spec, error) {
 	default:
 		return Spec{}, fmt.Errorf("package command %q has no execution specification", manager+":"+action)
 	}
+	for _, configFile := range variables.ConfigFiles {
+		configType := strings.ToLower(strings.TrimSpace(configFile.Type))
+		switch manager + ":" + configType {
+		case "gradle:init-script":
+			spec.Args = append(spec.Args, "--init-script", configFile.Path)
+		case "mvn:settings":
+			spec.Args = append(spec.Args, "--settings", configFile.Path)
+		case "mvn:global-settings":
+			spec.Args = append(spec.Args, "--global-settings", configFile.Path)
+		case "mvn:toolchains":
+			spec.Args = append(spec.Args, "--toolchains", configFile.Path)
+		case "mvn:global-toolchains":
+			spec.Args = append(spec.Args, "--global-toolchains", configFile.Path)
+		case "npm:userconfig":
+			spec.Args = append(spec.Args, "--userconfig", configFile.Path)
+		case "npm:globalconfig":
+			spec.Args = append(spec.Args, "--globalconfig", configFile.Path)
+		case "pip:config-file":
+			spec.Environment["PIP_CONFIG_FILE"] = configFile.Path
+		}
+	}
 	return spec, nil
+}
+
+// configFileRepeatable 回報 manager/type 是否為允許組合，以及同類型是否可重複。
+func configFileRepeatable(manager, configType string) (bool, error) {
+	switch manager + ":" + configType {
+	case "gradle:init-script":
+		return true, nil
+	case "mvn:settings", "mvn:global-settings", "mvn:toolchains", "mvn:global-toolchains",
+		"npm:userconfig", "npm:globalconfig", "pip:config-file":
+		return false, nil
+	default:
+		return false, fmt.Errorf("config file type %q is not supported for packageManager %q", configType, manager)
+	}
 }
 
 // errorsForOutput 建立缺少輸出目錄時的一致錯誤訊息。

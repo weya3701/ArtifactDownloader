@@ -90,9 +90,10 @@ type Repository struct {
 	CloneArgs []string `yaml:"cloneArgs"`
 }
 
-// PackageCommand 只允許宣告 package action，不允許任意 executable 或 args。
+// PackageCommand 只允許宣告 package action 與受控外部設定檔，不允許任意 executable 或 args。
 type PackageCommand struct {
-	Action string `yaml:"action"`
+	Action      string                      `yaml:"action"`
+	ConfigFiles []packagecommand.ConfigFile `yaml:"configFiles"`
 }
 
 // ExternalCommand 描述需額外授權的 callback executable 與逐項參數。
@@ -187,6 +188,9 @@ func decodeExternalCommand(node *yaml.Node) (ExternalCommand, error) {
 // ExpandJobEnvironment 將 job 路徑、repository 與命令設定中的主機環境參照展開。
 // 輸入為已解析 job 與是否允許主機環境；輸出為不修改原 job 的展開副本，未授權或缺少變數時輸出定位錯誤。
 func ExpandJobEnvironment(job Job, allowHostEnvironment bool) (Job, error) {
+	if job.Command.ConfigFiles != nil {
+		job.Command.ConfigFiles = append([]packagecommand.ConfigFile(nil), job.Command.ConfigFiles...)
+	}
 	fields := []struct {
 		name  string
 		value *string
@@ -200,6 +204,12 @@ func ExpandJobEnvironment(job Job, allowHostEnvironment bool) (Job, error) {
 		{"workingDirectory", &job.WorkingDirectory},
 		{"packageManager", &job.PackageManager},
 		{"command.action", &job.Command.Action},
+	}
+	for i := range job.Command.ConfigFiles {
+		fields = append(fields, struct {
+			name  string
+			value *string
+		}{fmt.Sprintf("command.configFiles[%d].path", i), &job.Command.ConfigFiles[i].Path})
 	}
 	for _, field := range fields {
 		expanded, err := expandJobValue(field.name, *field.value, allowHostEnvironment, nil)
@@ -367,6 +377,9 @@ func (c Config) Validate() error {
 
 		switch job.Type {
 		case JobTypeURLs:
+			if len(job.Command.ConfigFiles) > 0 {
+				return fmt.Errorf("job %q: command.configFiles is only supported for package jobs", job.Name)
+			}
 			if len(job.Environment) > 0 {
 				return fmt.Errorf("job %q: environment is only supported for package jobs", job.Name)
 			}
@@ -422,6 +435,11 @@ func (c Config) Validate() error {
 			}
 			if !managerReference && !actionReference {
 				if err := packagecommand.Validate(job.PackageManager, job.Command.Action); err != nil {
+					return fmt.Errorf("job %q: %w", job.Name, err)
+				}
+			}
+			if !managerReference {
+				if err := packagecommand.ValidateConfigFiles(job.PackageManager, job.Command.ConfigFiles); err != nil {
 					return fmt.Errorf("job %q: %w", job.Name, err)
 				}
 			}

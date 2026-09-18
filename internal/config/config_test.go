@@ -256,6 +256,77 @@ jobs:
 	}
 }
 
+func TestLoadPackageProxy(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	data := []byte(`version: 1
+jobs:
+  - name: npm
+    type: package
+    cache: ./cache
+    packageManager: npm
+    proxy: http://proxy.example.test:8080
+    repository:
+      url: https://example.test/repository.git
+    command:
+      action: install
+`)
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.Jobs[0].Proxy; got != "http://proxy.example.test:8080" {
+		t.Fatalf("proxy = %q", got)
+	}
+}
+
+func TestPackageProxyValidation(t *testing.T) {
+	base := Job{
+		Name: "package", Type: JobTypePackage, Cache: "cache",
+		Repository: Repository{URL: "repo"}, PackageManager: "npm",
+		Command: PackageCommand{Action: "install"}, Timeout: Duration(time.Minute),
+	}
+	tests := []struct {
+		name  string
+		proxy string
+		valid bool
+	}{
+		{name: "unset", valid: true},
+		{name: "http", proxy: "http://proxy.example.test:8080", valid: true},
+		{name: "https authenticated", proxy: "https://user:password@proxy.example.test", valid: true},
+		{name: "environment reference", proxy: "${PACKAGE_PROXY}", valid: true},
+		{name: "missing scheme", proxy: "proxy.example.test:8080"},
+		{name: "unsupported scheme", proxy: "socks5://proxy.example.test:1080"},
+		{name: "path", proxy: "http://proxy.example.test/path"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			job := base
+			job.Proxy = test.proxy
+			err := (Config{Version: 1, Jobs: []Job{job}}).Validate()
+			if test.valid && err != nil {
+				t.Fatalf("Validate() rejected proxy: %v", err)
+			}
+			if !test.valid && err == nil {
+				t.Fatal("Validate() accepted invalid proxy")
+			}
+		})
+	}
+}
+
+func TestURLJobRejectsProxy(t *testing.T) {
+	cfg := Config{Version: 1, Jobs: []Job{{
+		Name: "files", Type: JobTypeURLs, Output: "out", URLList: "urls.txt",
+		Concurrency: 1, Timeout: Duration(time.Minute), Proxy: "http://proxy.example.test:8080",
+	}}}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("Validate() accepted proxy on a URL job")
+	}
+}
+
 func TestLoadAcceptsTemplatedPackageCommand(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	data := []byte(`version: 1
@@ -293,10 +364,11 @@ func TestExpandJobEnvironmentFromHost(t *testing.T) {
 	t.Setenv("ADO_COLLECTION", "collection-name")
 	t.Setenv("PKGMANAGER", "npm")
 	t.Setenv("ACTION", "install-unlocked")
+	t.Setenv("PACKAGE_PROXY", "http://proxy.example.test:8080")
 
 	job := Job{
 		Output: "${OUTPUT}", Cache: "./cache", Workspace: "${PIPELINE_WORKSPACE}", WorkingDirectory: "${WORKDIR}",
-		PackageManager: "${PKGMANAGER}", Command: PackageCommand{Action: "${ACTION}"},
+		PackageManager: "${PKGMANAGER}", Proxy: "${PACKAGE_PROXY}", Command: PackageCommand{Action: "${ACTION}"},
 		Repository: Repository{
 			URL:     "https://dev.azure.com/org/${PROJECT}/_git/${REPOSITORY}",
 			Ref:     "${BRANCH}",
@@ -322,7 +394,8 @@ func TestExpandJobEnvironmentFromHost(t *testing.T) {
 	if expanded.Repository.URL != "https://dev.azure.com/org/project-name/_git/repository-name" ||
 		expanded.Repository.Ref != "main" || expanded.Workspace != "./pipeline-workspace" ||
 		expanded.WorkingDirectory != "src" || expanded.Output != "./artifacts" ||
-		expanded.PackageManager != "npm" || expanded.Command.Action != "install-unlocked" {
+		expanded.PackageManager != "npm" || expanded.Proxy != "http://proxy.example.test:8080" ||
+		expanded.Command.Action != "install-unlocked" {
 		t.Fatalf("expanded job fields = %#v", expanded)
 	}
 	if expanded.Environment["COLLECTION"] != "collection-name" || expanded.Environment["PACKAGE_CACHE"] != "${ARTIFACT_CACHE}" {

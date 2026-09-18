@@ -8,12 +8,14 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"artifactdownloader/internal/config"
 	"artifactdownloader/internal/environmentconfig"
+	"artifactdownloader/internal/packagecommand"
 )
 
 func TestRunnerURLJob(t *testing.T) {
@@ -215,7 +217,7 @@ func TestRunnerPackageJob(t *testing.T) {
 	if err := os.MkdirAll(binDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	gradle := []byte("#!/bin/sh\nset -eu\ntest \"$1\" = build\ntest \"$2\" = --no-daemon\ntest \"$POLICY_TARGET_TEST\" = from-policy\ntest \"$PACKAGE_CACHE_TEST\" = \"$ARTIFACT_CACHE\"\ntest \"$PACKAGE_OUTPUT_TEST\" = \"$ARTIFACT_OUTPUT\"\ntest \"$GRADLE_USER_HOME\" = \"$ARTIFACT_CACHE\"\ntest -f \"$PACKAGE_REPOSITORY_TEST/project/build.gradle\"\ntest -f \"$PACKAGE_WORKSPACE_TEST/repository/project/build.gradle\"\nprintf artifact > \"$ARTIFACT_OUTPUT/result.txt\"\nprintf cache > \"$ARTIFACT_CACHE/cache-used.txt\"\npackage_dir=\"$GRADLE_USER_HOME/caches/modules-2/files-2.1/com.example/demo/1.2.3/test-hash\"\nmkdir -p \"$package_dir\"\nprintf jar > \"$package_dir/demo-1.2.3.jar\"\nprintf pom > \"$package_dir/demo-1.2.3.pom\"\n")
+	gradle := []byte("#!/bin/sh\nset -eu\ntest \"$1\" = -Dhttp.proxyHost=proxy.example.test\ntest \"$2\" = -Dhttp.proxyPort=8080\ntest \"$3\" = -Dhttps.proxyHost=proxy.example.test\ntest \"$4\" = -Dhttps.proxyPort=8080\ntest \"$5\" = build\ntest \"$6\" = --no-daemon\ntest \"$HTTP_PROXY\" = http://proxy.example.test:8080\ntest \"$POLICY_TARGET_TEST\" = from-policy\ntest \"$PACKAGE_CACHE_TEST\" = \"$ARTIFACT_CACHE\"\ntest \"$PACKAGE_OUTPUT_TEST\" = \"$ARTIFACT_OUTPUT\"\ntest \"$GRADLE_USER_HOME\" = \"$ARTIFACT_CACHE\"\ntest -f \"$PACKAGE_REPOSITORY_TEST/project/build.gradle\"\ntest -f \"$PACKAGE_WORKSPACE_TEST/repository/project/build.gradle\"\nprintf artifact > \"$ARTIFACT_OUTPUT/result.txt\"\nprintf cache > \"$ARTIFACT_CACHE/cache-used.txt\"\npackage_dir=\"$GRADLE_USER_HOME/caches/modules-2/files-2.1/com.example/demo/1.2.3/test-hash\"\nmkdir -p \"$package_dir\"\nprintf jar > \"$package_dir/demo-1.2.3.jar\"\nprintf pom > \"$package_dir/demo-1.2.3.pom\"\n")
 	if err := os.WriteFile(filepath.Join(binDir, "gradle"), gradle, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -246,7 +248,7 @@ func TestRunnerPackageJob(t *testing.T) {
 			URL: repositoryDir, GitArgs: []string{"-c", "advice.detachedHead=false"},
 			CloneArgs: []string{"--no-tags"},
 		}, WorkingDirectory: "project",
-		PackageManager: "gradle", Command: config.PackageCommand{Action: "build"},
+		PackageManager: "gradle", Proxy: "http://proxy.example.test:8080", Command: config.PackageCommand{Action: "build"},
 		Environment: map[string]string{
 			"PACKAGE_CACHE_TEST":      "${ARTIFACT_CACHE}",
 			"PACKAGE_OUTPUT_TEST":     "${ARTIFACT_OUTPUT}",
@@ -306,6 +308,79 @@ func TestExpandVariables(t *testing.T) {
 	if got != "--dest=/cache" {
 		t.Fatalf("expandVariables() = %q", got)
 	}
+}
+
+func TestConfigurePackageProxy(t *testing.T) {
+	const proxyURL = "http://proxy.example.test:8080"
+	tests := map[string][]string{
+		"npm":  {"npm_config_proxy", "npm_config_https_proxy"},
+		"pip":  {"PIP_PROXY"},
+		"yarn": {"YARN_HTTP_PROXY", "YARN_HTTPS_PROXY"},
+	}
+	for manager, names := range tests {
+		t.Run(manager, func(t *testing.T) {
+			spec := packagecommand.Spec{}
+			environment, cleanup, err := configurePackageProxy(manager, proxyURL, &spec)
+			defer cleanup()
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, name := range names {
+				if environment[name] != proxyURL {
+					t.Fatalf("%s = %q", name, environment[name])
+				}
+			}
+		})
+	}
+
+	t.Run("gradle", func(t *testing.T) {
+		spec := packagecommand.Spec{Args: []string{"build", "--no-daemon"}}
+		_, cleanup, err := configurePackageProxy("gradle", proxyURL, &spec)
+		defer cleanup()
+		if err != nil {
+			t.Fatal(err)
+		}
+		arguments := strings.Join(spec.Args, " ")
+		if !strings.Contains(arguments, "-Dhttp.proxyHost=proxy.example.test") ||
+			!strings.Contains(arguments, "-Dhttps.proxyPort=8080") {
+			t.Fatalf("Gradle arguments = %#v", spec.Args)
+		}
+	})
+
+	t.Run("mvn", func(t *testing.T) {
+		spec := packagecommand.Spec{Args: []string{"package", "--batch-mode"}}
+		_, cleanup, err := configurePackageProxy("mvn", proxyURL, &spec)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(spec.Args) != 4 || spec.Args[0] != "--settings" {
+			cleanup()
+			t.Fatalf("Maven arguments = %#v", spec.Args)
+		}
+		settingsPath := spec.Args[1]
+		data, err := os.ReadFile(settingsPath)
+		if err != nil {
+			cleanup()
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(data), "<host>proxy.example.test</host>") {
+			cleanup()
+			t.Fatalf("Maven settings = %s", data)
+		}
+		stat, err := os.Stat(settingsPath)
+		if err != nil {
+			cleanup()
+			t.Fatal(err)
+		}
+		if stat.Mode().Perm() != 0o600 {
+			cleanup()
+			t.Fatalf("Maven settings permissions = %o", stat.Mode().Perm())
+		}
+		cleanup()
+		if _, err := os.Stat(settingsPath); !os.IsNotExist(err) {
+			t.Fatalf("temporary Maven settings still exists: %v", err)
+		}
+	})
 }
 
 func TestRetainNPMInstall(t *testing.T) {

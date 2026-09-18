@@ -246,6 +246,7 @@ overwrite: true
   workspace: .
   workingDirectory: .
   packageManager: npm
+  proxy: http://proxy.example.com:8080
   command:
     action: install
   cache: ./artifacts/npm-cache
@@ -263,6 +264,7 @@ overwrite: true
 | `workspace` | string | 否 | clone 與建構使用的 workspace；未設定時使用自動清理的系統暫存目錄 |
 | `workingDirectory` | string | 否 | repository 內執行命令的目錄；空值等同根目錄 |
 | `packageManager` | string | 是 | `gradle`、`mvn`、`npm`、`yarn`、`pip` |
+| `proxy` | string | 否 | package manager 下載套件時使用的 HTTP/HTTPS proxy URL；不影響 Git clone |
 | `command.action` | string | 是 | 必須是該 manager 的允許動作 |
 | `environment` | string map | 否 | 此 job 的固定環境變數；值可使用受控路徑變數 |
 | `cache` | string | 是 | 持久化依賴 cache 目錄 |
@@ -294,7 +296,7 @@ environment:
 
 值中可使用 `${ARTIFACT_CACHE}`、`${ARTIFACT_OUTPUT}`、`${WORKSPACE}` 與 `${REPOSITORY_DIR}`，並在執行 job 時展開為絕對路徑。環境變數名稱必須符合一般識別字格式。`ARTIFACT_CACHE`、`ARTIFACT_OUTPUT`、`HOME`、`GRADLE_USER_HOME`、`PIP_CACHE_DIR`、`npm_config_cache` 與 `YARN_CACHE_FOLDER` 由工具管理，不能在 job 中覆寫。`environment` 只套用於 package 命令，不會套用到 Git clone 或 callback。
 
-使用 `--inherit-environment` 時，`repository.url`、`repository.ref`、`workspace`、`workingDirectory`、`packageManager`、`command.action`、`cache`、`output`、`urlList`、URL `headers` 值、job `environment`、callback executable 與 args 也可引用啟動程序的 `${ENV_VAR}`：
+使用 `--inherit-environment` 時，`repository.url`、`repository.ref`、`workspace`、`workingDirectory`、`packageManager`、`proxy`、`command.action`、`cache`、`output`、`urlList`、URL `headers` 值、job `environment`、callback executable 與 args 也可引用啟動程序的 `${ENV_VAR}`：
 
 ```bash
 export PROJECT=my-project
@@ -446,7 +448,42 @@ jobs:
 
 `requirements.txt` 必須位於 `workingDirectory`。pip 只下載、不安裝，並將 wheel 或 source distribution 寫入 `output`。
 
-### 6.9 場景：一份設定執行多種工作
+### 6.9 場景：透過 Proxy 下載套件
+
+每個 package job 可設定一個 `proxy` URL，Artifact Downloader 會將它轉換成 npm、pip、Yarn、Gradle 或 Maven 的原生 proxy 設定，並同時用於 HTTP 與 HTTPS 套件下載：
+
+```yaml
+packageManager: npm
+proxy: http://proxy.example.com:8080
+command:
+  action: install
+```
+
+`proxy` 只接受 `http://` 或 `https://` URL，不可包含非根 path、query 或 fragment。需要 Basic Auth 時可在 URL 使用 URL 編碼後的帳密，例如 `http://user:p%40ss@proxy.example.com:8080`。含有帳密的 proxy 不應直接提交到設定檔；可改從主機環境展開：
+
+```bash
+export PACKAGE_PROXY='http://user:p%40ss@proxy.example.com:8080'
+./artifact-downloader run --config ./artifact.yaml --inherit-environment
+unset PACKAGE_PROXY
+```
+
+```yaml
+proxy: ${PACKAGE_PROXY}
+```
+
+各工具的套用方式如下：
+
+| Package manager | Proxy 套用方式 |
+| --- | --- |
+| npm | `npm_config_proxy`、`npm_config_https_proxy` |
+| pip | `PIP_PROXY` |
+| Yarn | `YARN_HTTP_PROXY`、`YARN_HTTPS_PROXY` |
+| Gradle | `http.proxy*`、`https.proxy*` JVM system properties |
+| Maven | 執行期間建立權限為 `0600` 的暫存 `settings.xml`，命令結束後刪除 |
+
+工具也會設定常見大小寫的 `HTTP_PROXY` 與 `HTTPS_PROXY`，供 package manager 啟動的下載子程序使用。`proxy` 不套用到前一步的 Git clone；Git 仍需依第 7.3 節設定 `repository.gitArgs`。未設定 `proxy` 時，內建最小環境仍會沿用啟動程序既有的常見 proxy 環境變數，保持向下相容。
+
+### 6.10 場景：一份設定執行多種工作
 
 ```yaml
 version: 1
@@ -542,7 +579,7 @@ export GIT_HTTP_PROXY='http://proxy.example.com:8080'
 ./artifact-downloader run --config ./artifact.yaml
 ```
 
-一般 HTTP 下載與 package manager 的 Proxy，則應透過啟動程序的 `HTTP_PROXY`、`HTTPS_PROXY`、`NO_PROXY` 或環境政策傳遞。
+Package manager 可直接使用 job 的 `proxy` 欄位（第 6.9 節）；Git clone 的 Proxy 則只由本節的 `repository.gitArgs` 控制。未設定 job `proxy` 時，仍可透過啟動程序的 `HTTP_PROXY`、`HTTPS_PROXY`、`NO_PROXY` 或環境政策傳遞給 package manager。
 
 ### 7.4 SSH repository
 

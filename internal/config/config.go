@@ -12,6 +12,7 @@ import (
 
 	"artifactdownloader/internal/environmentconfig"
 	"artifactdownloader/internal/packagecommand"
+	"artifactdownloader/internal/packageproxy"
 
 	"gopkg.in/yaml.v3"
 )
@@ -65,6 +66,7 @@ type Job struct {
 	Workspace        string            `yaml:"workspace"`
 	WorkingDirectory string            `yaml:"workingDirectory"`
 	PackageManager   string            `yaml:"packageManager"`
+	Proxy            string            `yaml:"proxy"`
 	Command          PackageCommand    `yaml:"command"`
 	Environment      map[string]string `yaml:"environment"`
 	Callback         CallbackCommands  `yaml:"callback"`
@@ -199,6 +201,7 @@ func ExpandJobEnvironment(job Job, allowHostEnvironment bool) (Job, error) {
 		{"workspace", &job.Workspace},
 		{"workingDirectory", &job.WorkingDirectory},
 		{"packageManager", &job.PackageManager},
+		{"proxy", &job.Proxy},
 		{"command.action", &job.Command.Action},
 	}
 	for _, field := range fields {
@@ -367,6 +370,9 @@ func (c Config) Validate() error {
 
 		switch job.Type {
 		case JobTypeURLs:
+			if strings.TrimSpace(job.Proxy) != "" {
+				return fmt.Errorf("job %q: proxy is only supported for package jobs", job.Name)
+			}
 			if len(job.Environment) > 0 {
 				return fmt.Errorf("job %q: environment is only supported for package jobs", job.Name)
 			}
@@ -411,6 +417,11 @@ func (c Config) Validate() error {
 			}
 			if strings.TrimSpace(job.Repository.URL) == "" {
 				return fmt.Errorf("job %q: repository.url is required", job.Name)
+			}
+			if strings.TrimSpace(job.Proxy) != "" && !jobEnvironmentReference.MatchString(job.Proxy) {
+				if _, err := packageproxy.Parse(job.Proxy); err != nil {
+					return fmt.Errorf("job %q: %w", job.Name, err)
+				}
 			}
 			if job.Repository.Depth < 0 {
 				return fmt.Errorf("job %q: repository.depth cannot be negative", job.Name)

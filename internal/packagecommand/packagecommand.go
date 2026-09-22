@@ -55,7 +55,7 @@ func Resolve(manager, action string, variables Variables) (Spec, error) {
 	switch manager + ":" + action {
 	case "gradle:build":
 		spec.Executable = "gradle"
-		spec.Args = []string{"build", "--no-daemon"}
+		spec.Args = []string{"build", "--no-daemon", "-x", "test"}
 		spec.Environment["GRADLE_USER_HOME"] = variables.Cache
 	case "mvn:build":
 		spec.Executable = "mvn"
